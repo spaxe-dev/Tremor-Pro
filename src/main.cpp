@@ -7,8 +7,17 @@
 #include <math.h>
 
 // ----------------------- CONFIG -----------------------
+// Access-Point fallback (used when STA connection fails)
 const char *AP_SSID = "TremorDevice";
 const char *AP_PASS = "12345678";
+
+// ── Station mode (home / office WiFi) ──
+// Change these to YOUR WiFi credentials so the ESP32 joins your
+// existing network. Your laptop stays on the same WiFi with internet.
+// If the ESP32 can't connect within the timeout, it falls back to AP mode.
+const char *STA_SSID = "YOUR_WIFI_SSID";      // ← change this
+const char *STA_PASS = "YOUR_WIFI_PASSWORD";   // ← change this
+const unsigned long STA_TIMEOUT_MS = 10000;    // 10 s connection timeout
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
@@ -37,6 +46,7 @@ const unsigned long LONG_PRESS_MS = 2000;
 // States
 bool streaming = false;
 bool calibrationMode = false;
+bool staConnected = false;  // true when connected to a router (STA mode)
 unsigned long calibStart = 0;
 double calibSum = 0.0;
 unsigned long calibCount = 0;
@@ -198,8 +208,43 @@ void setup(){
   pinMode(LED_PIN,OUTPUT);
   digitalWrite(LED_PIN,LOW);
 
-  WiFi.softAP(AP_SSID,AP_PASS);
-  Serial.println(WiFi.softAPIP());
+  // ── WiFi: try Station mode first, fall back to AP ──────────────
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(STA_SSID, STA_PASS);
+  Serial.print("Connecting to WiFi");
+
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < STA_TIMEOUT_MS) {
+    delay(500);
+    Serial.print(".");
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));  // blink while connecting
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    staConnected = true;
+    Serial.println();
+    Serial.print("Connected! IP: ");
+    Serial.println(WiFi.localIP());
+    // Triple-blink to indicate successful STA connection
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, HIGH); delay(100);
+      digitalWrite(LED_PIN, LOW);  delay(100);
+    }
+  } else {
+    Serial.println();
+    Serial.println("STA failed - starting AP mode");
+    WiFi.disconnect();
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+  }
+
+  // CORS headers — required so the AI dashboard (served from laptop)
+  // can make cross-origin SSE/fetch requests to the ESP32
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
 
   server.on("/",HTTP_GET,[](AsyncWebServerRequest *r){
     r->send(SPIFFS,"/index.html","text/html");
