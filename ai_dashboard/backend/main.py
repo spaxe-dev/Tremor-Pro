@@ -201,50 +201,43 @@ def build_user_prompt(s: SessionSummary) -> str:
     return user_input + request_section
 
 # ──────────────────────────────────────────────
-# MedGemma Inference
+# MedGemma Inference (via Kaggle notebook + ngrok)
 # ──────────────────────────────────────────────
 
-HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")
-MEDGEMMA_MODEL = "google/medgemma-4b-it"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{MEDGEMMA_MODEL}"
+KAGGLE_MEDGEMMA_URL = os.environ.get(
+    "KAGGLE_MEDGEMMA_URL",
+    "https://cleveland-nonparental-adalyn.ngrok-free.dev/predict",
+)
 
 
 async def call_medgemma(system_prompt: str, user_prompt: str) -> str:
     """
-    Call MedGemma 4B via HuggingFace Inference API.
-    Falls back to a placeholder response if the API key is missing or the call fails.
+    Call MedGemma 4B via the Kaggle-hosted Flask server (tunnelled through ngrok).
+    Falls back to a placeholder response if the URL is missing or the call fails.
     """
 
-    if not HF_API_TOKEN:
+    if not KAGGLE_MEDGEMMA_URL:
         return _placeholder_response(user_prompt)
 
-    headers = {
-        "Authorization": f"Bearer {HF_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
     payload = {
-        "inputs": f"<start_of_turn>system\n{system_prompt}<end_of_turn>\n<start_of_turn>user\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n",
-        "parameters": {
-            "max_new_tokens": 1024,
-            "temperature": 0.4,
-            "top_p": 0.9,
-            "return_full_text": False,
-        },
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "max_new_tokens": 1024,
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(HF_API_URL, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                KAGGLE_MEDGEMMA_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
             resp.raise_for_status()
             result = resp.json()
-
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get("generated_text", "No response generated.")
-            return str(result)
+            return result.get("generated_text", "No response generated.")
 
     except Exception as e:
-        print(f"[MedGemma API error] {e}")
+        print(f"[MedGemma Kaggle API error] {e}")
         return _placeholder_response(user_prompt)
 
 
