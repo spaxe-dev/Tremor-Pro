@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "chart.js": "^4.5.1",
-    "gsap": "^3.12.5"
+    "gsap": "^3.12.5",
+    "httpx": "^3.0.1"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.18",
