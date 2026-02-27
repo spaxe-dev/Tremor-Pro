@@ -315,10 +315,19 @@ function connectESP() {
     const j = JSON.parse(e.data);
     updateLiveDisplay(j);
     pushWave(j.score);
+    // Collect windows for the active regular session
     if (sessionActive) {
       sessionWindows.push({ b1: j.b1, b2: j.b2, b3: j.b3, score: j.score, type: j.type || '', confidence: j.confidence || 0, meanNorm: j.meanNorm || 0, ts: Date.now() });
       updateSessionSummary();
       updateTrend();
+    }
+    // Collect windows for the active standardized test phase
+    if (currentPhaseIdx >= 0 && currentPhaseIdx < TEST_PHASES.length) {
+      testPhaseWindows.push({ b1: j.b1, b2: j.b2, b3: j.b3, score: j.score, type: j.type || '', confidence: j.confidence || 0, meanNorm: j.meanNorm || 0, ts: Date.now() });
+      const wc = document.getElementById('tmWindowCount');
+      const ls = document.getElementById('tmLiveScore');
+      if (wc) wc.textContent = testPhaseWindows.length;
+      if (ls) ls.textContent = j.score.toFixed(2);
     }
   });
 
@@ -625,7 +634,11 @@ function runEntranceAnimations() {
 ═══════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
   // Expose functions to HTML onclick= attributes (ES module scope workaround)
-  Object.assign(window, { connectESP, startSession, stopSession, generateReport });
+  Object.assign(window, {
+    connectESP, startSession, stopSession, generateReport,
+    openTestSuite, skipTestPhase, abortTestSuite,
+    selectTestTab, closeTestResults
+  });
 
   initWaveChart();
   initSparkline();
@@ -634,3 +647,410 @@ document.addEventListener('DOMContentLoaded', () => {
   runEntranceAnimations();
   log('TremorSense AI <span style="color:#a78bfa">v2.1 ready</span> — npm Tailwind + GSAP');
 });
+
+/* ═══════════════════════════════════════════════════
+   STANDARDIZED TESTS ENGINE
+═══════════════════════════════════════════════════ */
+
+const TEST_PHASES = [
+  {
+    id: 'rest',
+    label: 'Rest Test',
+    duration: 35,
+    animId: 'anim-rest',
+    color: '#2dd4bf',
+    instruction: 'Rest your hand comfortably on your lap. Relax completely and stay as still as possible.'
+  },
+  {
+    id: 'postural',
+    label: 'Postural Test',
+    duration: 35,
+    animId: 'anim-postural',
+    color: '#a78bfa',
+    instruction: 'Extend both arms forward at shoulder height, palms facing down. Hold the position steadily.'
+  },
+  {
+    id: 'movement',
+    label: 'Movement Test',
+    duration: 40,
+    animId: 'anim-movement',
+    color: '#2dd4bf',
+    instruction: 'Alternately touch your nose with your index finger, then reach out and touch the target. Repeat smoothly.'
+  }
+];
+
+let testPhaseWindows = [];   // SSE data collected during current phase
+let currentPhaseIdx = -1;   // which phase is running (-1 = none)
+let testResults = [];   // [{phase, windows, aiResponse}]
+let testCountdown = 0;    // seconds remaining in current phase
+let testCountdownInt = null; // setInterval handle
+let testGsapAnims = [];   // GSAP tween refs to kill on cleanup
+let demoInterval = null; // mock data interval when no device
+let isDemo = false;
+
+// ─── OPEN ───────────────────────────────────────────
+function openTestSuite() {
+  testPhaseWindows = [];
+  testResults = [];
+  currentPhaseIdx = -1;
+
+  const modal = document.getElementById('testModal');
+  modal.classList.remove('hidden');
+  gsap.fromTo(modal, { opacity: 0 }, { opacity: 1, duration: 0.4 });
+
+  // Show demo badge if no SSE
+  isDemo = !sse || sse.readyState !== EventSource.OPEN;
+  document.getElementById('tmDemoTag').classList.toggle('hidden', !isDemo);
+
+  log(`<span style="color:#38bdf8">🔬 Standardized test suite started${isDemo ? ' (DEMO MODE)' : ''}</span>`);
+  _startNextPhase();
+}
+
+// ─── PHASE LIFECYCLE ────────────────────────────────
+function _startNextPhase() {
+  currentPhaseIdx++;
+  if (currentPhaseIdx >= TEST_PHASES.length) { _finishTests(); return; }
+
+  const phase = TEST_PHASES[currentPhaseIdx];
+  testPhaseWindows = [];
+
+  // Update header UI
+  document.getElementById('tmPhaseBadge').textContent = `Phase ${currentPhaseIdx + 1}/${TEST_PHASES.length}`;
+  document.getElementById('tmPhaseLabel').textContent = phase.label;
+  document.getElementById('tmInstruction').textContent = phase.instruction;
+  document.getElementById('tmWindowCount').textContent = '0';
+  document.getElementById('tmLiveScore').textContent = '—';
+
+  // Switch animations
+  TEST_PHASES.forEach(p => {
+    const el = document.getElementById(p.animId);
+    if (el) el.classList.add('hidden');
+  });
+  const animEl = document.getElementById(phase.animId);
+  if (animEl) {
+    animEl.classList.remove('hidden');
+    gsap.fromTo(animEl, { opacity: 0, scale: 0.88 }, { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.6)' });
+  }
+
+  // Kill previous GSAP animations
+  testGsapAnims.forEach(t => t && t.kill());
+  testGsapAnims = [];
+
+  // Phase-specific GSAP animations
+  if (phase.id === 'rest') {
+    testGsapAnims.push(
+      // Calm breathing — torso subtle scale
+      gsap.to('#anim-rest rect:nth-of-type(3)', { scaleY: 1.04, duration: 3, repeat: -1, yoyo: true, ease: 'sine.inOut', transformOrigin: 'center' }),
+      // Hand resting — very faint opacity flicker
+      gsap.to('#rf1', { opacity: 0.7, duration: 2.2, repeat: -1, yoyo: true, ease: 'sine.inOut' }),
+      // Finger lines micro-tremble (subtle)
+      gsap.to(['#rf2', '#rf3', '#rf4'], { x: 0.8, duration: 2.8, repeat: -1, yoyo: true, ease: 'sine.inOut', stagger: 0.25 }),
+      // Calm pulse ring breathes outward slowly
+      gsap.to('#restPulse', { scale: 1.12, opacity: 0.04, duration: 3.2, repeat: -1, yoyo: true, ease: 'sine.inOut', transformOrigin: '80px 110px' })
+    );
+  } else if (phase.id === 'postural') {
+    testGsapAnims.push(
+      // Arms hold position — subtle tremble up/down
+      gsap.to('#armLeft', { y: -4, duration: 2.2, repeat: -1, yoyo: true, ease: 'sine.inOut' }),
+      gsap.to('#armRight', { y: -4, duration: 2.2, repeat: -1, yoyo: true, ease: 'sine.inOut', delay: 0.4 })
+    );
+  } else if (phase.id === 'movement') {
+    // Animate mvDot along the arc path using attrTween on cx/cy
+    const pathEl = document.getElementById('mvPath');
+    if (pathEl) {
+      const pathLen = pathEl.getTotalLength();
+      const mvDot = document.getElementById('mvDot');
+      let t = 0, dir = 1;
+      const mvAnim = gsap.ticker.add(() => {
+        t += 0.005 * dir;
+        if (t >= 1) { t = 1; dir = -1; }
+        if (t <= 0) { t = 0; dir = 1; }
+        const pt = pathEl.getPointAtLength(t * pathLen);
+        if (mvDot) { mvDot.setAttribute('cx', pt.x); mvDot.setAttribute('cy', pt.y); }
+      });
+      testGsapAnims.push({ kill: () => gsap.ticker.remove(mvAnim) });
+    }
+  }
+
+  // Setup countdown ring
+  const totalCirc = 364.4; // 2π × 58
+  testCountdown = phase.duration;
+  _updateRing(testCountdown, phase.duration, totalCirc);
+  document.getElementById('cdSeconds').textContent = testCountdown;
+
+  // Start demo mode simulator if needed
+  if (isDemo) _startDemoData();
+
+  // Start countdown
+  if (testCountdownInt) clearInterval(testCountdownInt);
+  testCountdownInt = setInterval(() => {
+    testCountdown--;
+    document.getElementById('cdSeconds').textContent = Math.max(testCountdown, 0);
+    _updateRing(testCountdown, phase.duration, totalCirc);
+    document.getElementById('tmWindowCount').textContent = testPhaseWindows.length;
+    if (testCountdown <= 0) {
+      clearInterval(testCountdownInt);
+      testCountdownInt = null;
+      _stopDemoData();
+      _saveCurrentPhasePayload();
+      _advancePhase();
+    }
+  }, 1000);
+
+  log(`<span style="color:#38bdf8">▶ ${phase.label} — ${phase.duration}s</span>`);
+}
+
+function _updateRing(remaining, total, circ) {
+  const ring = document.getElementById('cdRing');
+  if (!ring) return;
+  const frac = Math.max(remaining, 0) / total;
+  ring.style.strokeDashoffset = ((1 - frac) * circ).toFixed(2);
+}
+
+function _advancePhase() {
+  // Animate transition
+  const modal = document.getElementById('testModal');
+  gsap.to(modal.querySelector('.relative.z-10'), {
+    opacity: 0, y: -20, duration: 0.3, onComplete: () => {
+      gsap.to(modal.querySelector('.relative.z-10'), { opacity: 1, y: 0, duration: 0.4, delay: 0.05 });
+      _startNextPhase();
+    }
+  });
+}
+
+// ─── DEMO DATA SIMULATOR ────────────────────────────
+function _startDemoData() {
+  _stopDemoData();
+  let lastScore = 3 + Math.random() * 2;
+  demoInterval = setInterval(() => {
+    lastScore += (Math.random() - 0.5) * 0.8;
+    lastScore = Math.max(0.5, Math.min(9.5, lastScore));
+    const b1 = Math.random(), b2 = Math.random(), b3 = Math.random();
+    const tot = b1 + b2 + b3 || 1;
+    const w = {
+      b1: b1 / tot * lastScore,
+      b2: b2 / tot * lastScore,
+      b3: b3 / tot * lastScore,
+      score: +lastScore.toFixed(2),
+      type: 'demo',
+      confidence: 0.7,
+      meanNorm: lastScore / 10,
+      ts: Date.now()
+    };
+    testPhaseWindows.push(w);
+    // Update modal live score
+    const ls = document.getElementById('tmLiveScore');
+    if (ls) { ls.textContent = lastScore.toFixed(2); }
+  }, 600);
+}
+
+function _stopDemoData() {
+  if (demoInterval) { clearInterval(demoInterval); demoInterval = null; }
+}
+
+// ─── SKIP / ABORT ────────────────────────────────────
+function skipTestPhase() {
+  if (currentPhaseIdx < 0) return;
+  clearInterval(testCountdownInt); testCountdownInt = null;
+  _stopDemoData();
+  _saveCurrentPhasePayload();
+  log(`<span style="color:#fbbf24">⏭ Skipped ${TEST_PHASES[currentPhaseIdx].label}</span>`);
+  _advancePhase();
+}
+
+function abortTestSuite() {
+  clearInterval(testCountdownInt); testCountdownInt = null;
+  _stopDemoData();
+  testGsapAnims.forEach(t => t && t.kill()); testGsapAnims = [];
+  currentPhaseIdx = -1;
+  const modal = document.getElementById('testModal');
+  gsap.to(modal, { opacity: 0, duration: 0.3, onComplete: () => modal.classList.add('hidden') });
+  log('<span style="color:#fb7185">✗ Test suite aborted</span>');
+}
+
+// ─── FINISH ALL PHASES ───────────────────────────────
+async function _finishTests() {
+  testGsapAnims.forEach(t => t && t.kill()); testGsapAnims = [];
+  currentPhaseIdx = -1;
+
+  const modal = document.getElementById('testModal');
+  gsap.to(modal, { opacity: 0, duration: 0.35, onComplete: () => modal.classList.add('hidden') });
+
+  log('<span style="color:#38bdf8">⏳ Sending test phases to AI for analysis…</span>');
+
+  // Render empty results card while loading
+  const card = document.getElementById('testResultsCard');
+  card.classList.remove('hidden');
+  gsap.fromTo(card, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4 });
+  document.getElementById('trs-content').innerHTML = '<p style="color:#475569;font-size:12px">Analysing phases via MedGemma…</p>';
+  document.getElementById('trs-confidence').innerHTML = '';
+  document.getElementById('trs-advisory').textContent = '';
+
+  // Analyse each phase
+  for (let i = 0; i < testResults.length; i++) {
+    const r = testResults[i];
+    const summary = _buildPhaseSummary(r.windows, r.phase);
+    if (!summary) { r.aiResponse = null; continue; }
+
+    // Update score chip
+    const scoreEl = document.getElementById(`trs-${r.phase}-score`);
+    if (scoreEl && summary.intensity_profile.tremor_score.mean !== undefined) {
+      scoreEl.textContent = summary.intensity_profile.tremor_score.mean.toFixed(2);
+    }
+
+    try {
+      const resp = await fetch(BACKEND_URL + '/tests/analyze-phase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase: r.phase, duration_seconds: r.duration, session: summary })
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      r.aiResponse = await resp.json();
+      log(`<span style="color:#34d399">✓ ${r.phase.charAt(0).toUpperCase() + r.phase.slice(1)} phase analysed</span>`);
+    } catch (err) {
+      r.aiResponse = { clinical_summary: `❌ ${err.message}`, confidence_level: 'Low', advisory_note: `Backend error for ${r.phase} phase.` };
+      log(`<span style="color:#fb7185">✗ ${r.phase}: ${err.message}</span>`);
+    }
+  }
+
+  // Default to first available phase tab
+  const firstAvail = testResults.find(r => r.aiResponse);
+  selectTestTab(firstAvail ? firstAvail.phase : 'rest');
+  log('<span style="color:#38bdf8">✅ Standardized test report ready</span>');
+}
+
+// ─── BUILD SESSION-SUMMARY FOR A PHASE ──────────────
+function _buildPhaseSummary(windows, phase) {
+  if (!windows || windows.length < 2) return null;
+  const W = windows, n = W.length;
+  const scores = W.map(w => w.score);
+  const mean = scores.reduce((a, b) => a + b, 0) / n;
+  const std = Math.sqrt(scores.reduce((a, s) => a + (s - mean) ** 2, 0) / n);
+  const b1s = W.map(w => w.b1), b2s = W.map(w => w.b2), b3s = W.map(w => w.b3);
+  const b1m = b1s.reduce((a, b) => a + b, 0) / n;
+  const b2m = b2s.reduce((a, b) => a + b, 0) / n;
+  const b3m = b3s.reduce((a, b) => a + b, 0) / n;
+  const b1std = Math.sqrt(b1s.reduce((a, v) => a + (v - b1m) ** 2, 0) / n);
+  const b2std = Math.sqrt(b2s.reduce((a, v) => a + (v - b2m) ** 2, 0) / n);
+  const b3std = Math.sqrt(b3s.reduce((a, v) => a + (v - b3m) ** 2, 0) / n);
+  const tot = b1m + b2m + b3m || 1;
+  const domBand = b1m >= b2m && b1m >= b3m ? '4_6_hz' : b2m >= b3m ? '6_8_hz' : '8_12_hz';
+  const domPct = Math.max(b1m, b2m, b3m) / tot;
+  const domRatio = Math.max(b1m, b2m, b3m) / (Math.min(b1m, b2m, b3m) || 0.001);
+  let sw = 0;
+  for (let i = 1; i < n; i++) {
+    const prev = W[i - 1].b1 >= W[i - 1].b2 && W[i - 1].b1 >= W[i - 1].b3 ? 1 : W[i - 1].b2 >= W[i - 1].b3 ? 2 : 3;
+    const cur = W[i].b1 >= W[i].b2 && W[i].b1 >= W[i].b3 ? 1 : W[i].b2 >= W[i].b3 ? 2 : 3;
+    if (prev !== cur) sw++;
+  }
+  const pB = [b1m, b2m, b3m].map(v => v / tot);
+  const spEnt = +(-(pB.reduce((s, p) => p > 0 ? s + p * Math.log2(p) : s, 0)) / Math.log2(3)).toFixed(4);
+  const low = scores.filter(s => s < 2.5).length / n;
+  const mod = scores.filter(s => s >= 2.5 && s < 5).length / n;
+  const high = scores.filter(s => s >= 5 && s < 7.5).length / n;
+  const vh = scores.filter(s => s >= 7.5).length / n;
+  const cv = std / (mean || 1);
+  let wtv = 0; for (let i = 1; i < n; i++) wtv += (scores[i] - scores[i - 1]) ** 2; wtv /= (n - 1);
+  const durMin = (W[n - 1].ts - W[0].ts) / 60000;
+  const xm = (n - 1) / 2; let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { num += (i - xm) * (scores[i] - mean); den += (i - xm) ** 2; }
+  const slope = durMin > 0 ? ((den ? num / den : 0) * n) / durMin : 0;
+  const hN = Math.floor(n / 2);
+  const earlyAvg = scores.slice(0, hN).reduce((a, b) => a + b, 0) / hN;
+  const lateAvg = scores.slice(hN).reduce((a, b) => a + b, 0) / (n - hN);
+  const elChange = earlyAvg ? ((lateAvg - earlyAvg) / earlyAvg) * 100 : 0;
+  const rmsMean = W.map(w => w.meanNorm || 0).reduce((a, b) => a + b, 0) / n;
+
+  return {
+    metadata: {
+      session_id: 'T' + Date.now().toString().slice(-4),
+      timestamp: new Date().toISOString(),
+      duration_minutes: +durMin.toFixed(3),
+      sampling_rate_hz: 50,
+      condition: phase,
+      medication_status: 'unknown',
+      tremor_score_scale: '0_to_10_log_scaled'
+    },
+    frequency_profile: {
+      band_power_mean: { hz_4_6: +b1m.toFixed(3), hz_6_8: +b2m.toFixed(3), hz_8_12: +b3m.toFixed(3) },
+      band_power_std: { hz_4_6: +b1std.toFixed(3), hz_6_8: +b2std.toFixed(3), hz_8_12: +b3std.toFixed(3) },
+      dominant_band: domBand, dominance_ratio: +domRatio.toFixed(2),
+      dominant_band_percentage: +domPct.toFixed(3), band_switch_count: sw
+    },
+    intensity_profile: {
+      tremor_score: {
+        mean: +mean.toFixed(2), std: +std.toFixed(2),
+        min: +Math.min(...scores).toFixed(2), max: +Math.max(...scores).toFixed(2),
+        p25: +percentile(scores, 25).toFixed(2), p50: +percentile(scores, 50).toFixed(2),
+        p75: +percentile(scores, 75).toFixed(2), p90: +percentile(scores, 90).toFixed(2)
+      },
+      rms_mean: +rmsMean.toFixed(3),
+      noise_floor_adjusted_intensity: +(rmsMean * 0.93).toFixed(3)
+    },
+    intensity_distribution: { low_fraction: +low.toFixed(3), moderate_fraction: +mod.toFixed(3), high_fraction: +high.toFixed(3), very_high_fraction: +vh.toFixed(3) },
+    variability_profile: { coefficient_of_variation: +cv.toFixed(3), stability_index: +Math.max(0, 1 - cv).toFixed(3), spectral_entropy: spEnt, window_to_window_variance: +wtv.toFixed(3) },
+    within_session_trend: { linear_slope_per_minute_score_units: +slope.toFixed(4), early_vs_late_change_percent: +elChange.toFixed(1), fatigue_pattern_detected: elChange > 5 },
+    multi_session_trend: { dominant_band_consistency_last_3: 'N/A (single test)', tremor_score_weekly_slope: '+0.0', severity_change_percent: 'N/A', band_shift_detected: false }
+  };
+}
+
+// ─── SSE HOOK — collect during active test phase ────
+// The SSE 'bands' listener in connectESP already handles test-phase window
+// collection inline (see the if (currentPhaseIdx >= 0) block in connectESP).
+// No separate hook or monkey-patching is needed.
+
+// Store phase collectors for phases we auto-close (completed)
+// Override _startNextPhase post-completion to snap captured windows
+const _rawStartNextPhase = _startNextPhase;
+
+// Store current phase data when moving on
+function _saveCurrentPhasePayload() {
+  if (currentPhaseIdx >= 0 && currentPhaseIdx < TEST_PHASES.length) {
+    testResults.push({
+      phase: TEST_PHASES[currentPhaseIdx].id,
+      duration: TEST_PHASES[currentPhaseIdx].duration,
+      windows: [...testPhaseWindows]
+    });
+  }
+}
+
+// Patch _advancePhase to save before moving
+const _rawAdvancePhase = _advancePhase;
+
+// ─── RESULTS CARD ────────────────────────────────────
+function selectTestTab(phase) {
+  // Update tab styling
+  ['rest', 'postural', 'movement'].forEach(p => {
+    const tab = document.getElementById(`trsTab-${p}`);
+    if (tab) tab.classList.toggle('active', p === phase);
+  });
+
+  const r = testResults.find(x => x.phase === phase);
+  const content = document.getElementById('trs-content');
+  const confEl = document.getElementById('trs-confidence');
+  const advEl = document.getElementById('trs-advisory');
+
+  if (!r || !r.aiResponse) {
+    content.innerHTML = '<p style="color:#475569;font-size:12px">No data collected for this phase.</p>';
+    confEl.innerHTML = '';
+    advEl.textContent = '';
+    return;
+  }
+
+  const ai = r.aiResponse;
+  content.innerHTML = ai.clinical_summary
+    .replace(/## (.+)/g, '<h3>$1</h3>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+
+  const cl = ai.confidence_level.toLowerCase();
+  confEl.className = 'ai-confidence-chip ' + cl;
+  confEl.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Confidence: ${ai.confidence_level}`;
+  advEl.textContent = '⚠️ ' + ai.advisory_note;
+}
+
+function closeTestResults() {
+  const card = document.getElementById('testResultsCard');
+  gsap.to(card, { opacity: 0, y: -10, duration: 0.3, onComplete: () => card.classList.add('hidden') });
+}
+

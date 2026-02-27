@@ -95,6 +95,11 @@ class ClinicalResponse(BaseModel):
     confidence_level: str
     advisory_note: str
 
+class TestPhaseResult(BaseModel):
+    phase: str                     # 'rest' | 'postural' | 'movement'
+    duration_seconds: float
+    session: SessionSummary = SessionSummary()
+
 # ──────────────────────────────────────────────
 # FastAPI App
 # ──────────────────────────────────────────────
@@ -201,43 +206,50 @@ def build_user_prompt(s: SessionSummary) -> str:
     return user_input + request_section
 
 # ──────────────────────────────────────────────
-# MedGemma Inference (via Kaggle notebook + ngrok)
+# MedGemma Inference
 # ──────────────────────────────────────────────
 
-KAGGLE_MEDGEMMA_URL = os.environ.get(
-    "KAGGLE_MEDGEMMA_URL",
-    "https://cleveland-nonparental-adalyn.ngrok-free.dev/predict",
-)
+HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")
+MEDGEMMA_MODEL = "google/medgemma-4b-it"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{MEDGEMMA_MODEL}"
 
 
 async def call_medgemma(system_prompt: str, user_prompt: str) -> str:
     """
-    Call MedGemma 4B via the Kaggle-hosted Flask server (tunnelled through ngrok).
-    Falls back to a placeholder response if the URL is missing or the call fails.
+    Call MedGemma 4B via HuggingFace Inference API.
+    Falls back to a placeholder response if the API key is missing or the call fails.
     """
 
-    if not KAGGLE_MEDGEMMA_URL:
+    if not HF_API_TOKEN:
         return _placeholder_response(user_prompt)
 
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
     payload = {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt,
-        "max_new_tokens": 1024,
+        "inputs": f"<start_of_turn>system\n{system_prompt}<end_of_turn>\n<start_of_turn>user\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n",
+        "parameters": {
+            "max_new_tokens": 1024,
+            "temperature": 0.4,
+            "top_p": 0.9,
+            "return_full_text": False,
+        },
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                KAGGLE_MEDGEMMA_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(HF_API_URL, json=payload, headers=headers)
             resp.raise_for_status()
             result = resp.json()
-            return result.get("generated_text", "No response generated.")
+
+            if isinstance(result, list) and len(result) > 0:
+                return result[0].get("generated_text", "No response generated.")
+            return str(result)
 
     except Exception as e:
-        print(f"[MedGemma Kaggle API error] {e}")
+        print(f"[MedGemma API error] {e}")
         return _placeholder_response(user_prompt)
 
 
@@ -297,6 +309,50 @@ async def analyze(session: SessionSummary):
         "constitute a medical diagnosis. Results should be reviewed by a qualified "
         "healthcare professional. Tremor patterns may vary based on medication, fatigue, "
         "stress, and other clinical factors not captured by sensor data alone."
+    )
+
+    return ClinicalResponse(
+        clinical_summary=raw_response,
+        confidence_level=confidence,
+        advisory_note=advisory,
+    )
+
+
+@app.post("/tests/analyze-phase", response_model=ClinicalResponse)
+async def analyze_test_phase(payload: TestPhaseResult):
+    """
+    Accepts a single standardized-test phase (rest / postural / movement),
+    stamps the correct condition into metadata, calls MedGemma, and returns
+    the clinical analysis for that phase.
+    """
+    # Overwrite the condition field so the AI prompt carries the correct context
+    payload.session.metadata.condition = payload.phase
+    if payload.session.metadata.duration_minutes == 0 and payload.duration_seconds > 0:
+        payload.session.metadata.duration_minutes = round(payload.duration_seconds / 60, 3)
+
+    user_prompt = build_user_prompt(payload.session)
+    # Prepend a short phase-context header so MedGemma knows the test type
+    phase_header = (
+        f"STANDARDIZED TEST — PHASE: {payload.phase.upper()}\n"
+        f"Duration: {payload.duration_seconds:.0f} seconds\n"
+        "The patient performed the standardized clinical tremor test as described below.\n"
+        "Focus analysis specifically on the tremor characteristics relevant to this test type:\n"
+        " • Rest: resting tremor (Parkinsonian-type characteristics)\n"
+        " • Postural: postural/sustained-position tremor (essential tremor / dystonic features)\n"
+        " • Movement: action/kinetic tremor (cerebellar / essential tremor features)\n\n"
+    )
+    raw_response = await call_medgemma(SYSTEM_INSTRUCTION, phase_header + user_prompt)
+
+    confidence = "Moderate"
+    for level in ["High", "Low", "Moderate"]:
+        if level.lower() in raw_response.lower():
+            confidence = level
+            break
+
+    advisory = (
+        f"[{payload.phase.capitalize()} Phase] This AI analysis is generated for the standardized "
+        f"{payload.phase} tremor test and does not constitute a medical diagnosis. "
+        "Results must be corroborated with clinical examination by a qualified neurologist."
     )
 
     return ClinicalResponse(

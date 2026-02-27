@@ -15,8 +15,8 @@ const char *AP_PASS = "12345678";
 // Change these to YOUR WiFi credentials so the ESP32 joins your
 // existing network. Your laptop stays on the same WiFi with internet.
 // If the ESP32 can't connect within the timeout, it falls back to AP mode.
-const char *STA_SSID = "YOUR_WIFI_SSID";      // ← change this
-const char *STA_PASS = "YOUR_WIFI_PASSWORD";   // ← change this
+const char *STA_SSID = "Yuri";      // ← change this
+const char *STA_PASS = "aadit7621";   // ← change this
 const unsigned long STA_TIMEOUT_MS = 10000;    // 10 s connection timeout
 
 AsyncWebServer server(80);

@@ -1,14 +1,14 @@
 /* ─────────────────────────────────────────────────────────
+   Google Fonts (must be first for PostCSS @import ordering)
+   ───────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+
+/* ─────────────────────────────────────────────────────────
    Tailwind CSS — processed by PostCSS via Vite
    ───────────────────────────────────────────────────────── */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* ─────────────────────────────────────────────────────────
-   Google Fonts
-   ───────────────────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 
 /* ─────────────────────────────────────────────────────────
    Base resets on top of Tailwind
@@ -330,6 +330,158 @@
     background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
     background-size: 32px 32px;
   }
+}
+
+/* ─────────────────────────────────────────────────────────
+   STANDARDIZED TESTS — Modal & UI styles
+   ───────────────────────────────────────────────────────── */
+
+/* Full-screen test overlay */
+.test-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.test-modal.hidden {
+  display: none;
+}
+
+/* Phase badge pill in modal header */
+.test-phase-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  color: #38bdf8;
+}
+
+/* SVG animation container */
+.tm-anim-area {
+  width: 240px;
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.phase-anim {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 18px rgba(45, 212, 191, 0.18));
+  transition: opacity 0.3s ease;
+}
+
+/* Countdown ring transition handled via JS style.strokeDashoffset */
+#cdRing {
+  stroke-linecap: round;
+}
+
+/* Tests sidebar button */
+.tests-btn {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.22);
+  color: #7dd3fc;
+}
+
+.tests-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.38);
+  transform: translateY(-1px);
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.12);
+}
+
+/* Test results card — phase tabs */
+.test-result-tab {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.test-result-tab:hover {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.22);
+  color: #7dd3fc;
+}
+
+.test-result-tab.active {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.12);
+}
+
+/* AI confidence chip reused in test results */
+.ai-confidence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid;
+}
+
+.ai-confidence-chip.high {
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.2);
+}
+
+.ai-confidence-chip.moderate {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
+.ai-confidence-chip.low {
+  background: rgba(251, 113, 133, 0.1);
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.2);
+}
+
+/* Custom scrollbar for test results content */
+.custom-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.2);
+  border-radius: 4px;
+}
+
+/* Postural & rest anim glow filters */
+#anim-postural {
+  filter: drop-shadow(0 0 18px rgba(139, 92, 246, 0.2));
+}
+
+#anim-movement {
+  filter: drop-shadow(0 0 16px rgba(45, 212, 191, 0.2));
 }
 
 /* ─────────────────────────────────────────────────────────
