@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+
+<head>
+  <meta charset="UTF-8">
+  <title>TremorSense AI — Clinical Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description"
+    content="AI-powered clinical tremor analysis — ESP32 real-time data with rule-based biomarker interpretation.">
+
+  <!-- Tailwind + custom styles — processed by Vite + PostCSS -->
+  <script type="module" crossorigin src="/assets/index-DDA9AKiq.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DAOB5w3m.css">
+</head>
+
+<body class="bg-[#060610] text-slate-100 font-sans h-full flex overflow-x-hidden">
+
+  <!-- ═══ AMBIENT GLOWS ═══ -->
+  <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+    <div class="glow-orb absolute -top-48 -right-32 w-[700px] h-[700px] rounded-full"
+      style="background:radial-gradient(circle,rgba(139,92,246,0.14) 0%,transparent 70%);filter:blur(120px)"></div>
+    <div class="glow-orb absolute -bottom-32 left-[200px] w-[500px] h-[500px] rounded-full"
+      style="background:radial-gradient(circle,rgba(45,212,191,0.1) 0%,transparent 70%);filter:blur(120px)"></div>
+    <div class="glow-orb absolute top-1/3 right-1/3 w-[300px] h-[300px] rounded-full"
+      style="background:radial-gradient(circle,rgba(251,113,133,0.07) 0%,transparent 70%);filter:blur(100px)"></div>
+    <div class="absolute inset-0 dot-grid"></div>
+  </div>
+
+  <canvas id="bgCanvas" class="fixed inset-0 w-full h-full pointer-events-none z-0 opacity-40"></canvas>
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside id="sidebar" class="fixed top-0 left-0 bottom-0 z-50 flex flex-col w-60
+         bg-[rgba(6,6,20,0.92)] border-r border-white/[0.06]
+         backdrop-blur-2xl px-4 py-5">
+
+    <!-- Logo -->
+    <div id="sb-logo" class="flex items-center gap-3 pb-5">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0
+                border border-violet-500/30" style="background:linear-gradient(135deg,rgba(139,92,246,0.3),rgba(45,212,191,0.2));
+                box-shadow:0 0 20px rgba(139,92,246,0.2)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="rgba(139,92,246,0.3)"
+            stroke="#8b5cf6" stroke-width="1.5" />
+          <path d="M2 12h4M18 12h4M12 6V2M12 22v-4" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round" />
+          <circle cx="12" cy="12" r="3" fill="#a78bfa" />
+        </svg>
+      </div>
+      <div>
+        <div
+          class="font-grotesk text-base font-bold bg-gradient-to-r from-violet-400 to-teal-400 bg-clip-text text-transparent">
+          TremorSense</div>
+        <div class="text-[10px] text-slate-500 font-medium tracking-wider uppercase mt-0.5">AI Clinical</div>
+      </div>
+    </div>
+
+    <div class="h-px bg-white/[0.06] mb-5"></div>
+
+    <!-- Device -->
+    <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Device</div>
+
+    <div class="flex items-center gap-2 bg-white/[0.05] border border-white/[0.09] rounded-xl px-3 py-2 mb-3
+              focus-within:border-violet-500/40 transition-colors duration-200">
+      <svg class="text-violet-400 flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M6.34 17.66a8 8 0 0 1 0-11.32M17.66 6.34a8 8 0 0 1 0 11.32" />
+      </svg>
+      <input id="espIP" type="text" value="10.165.227.61" placeholder="ESP32 IP"
+        class="bg-transparent border-none outline-none text-slate-100 font-mono text-xs w-full placeholder:text-slate-600">
+    </div>
+
+    <button id="btnConnect" onclick="connectESP()" class="group flex items-center justify-center gap-2 w-full py-2.5 rounded-xl
+           border border-violet-500/30 bg-violet-500/10 text-violet-300 text-[13px] font-semibold mb-3
+           transition-all duration-200 hover:bg-violet-500/20 hover:border-violet-400/50
+           hover:shadow-violet hover:-translate-y-px">
+      <span class="w-1.5 h-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_rgba(167,139,250,0.8)]"></span>
+      Connect
+    </button>
+
+    <div id="statusPill" class="status-chip disconnected mb-2">
+      <span id="statusDot" class="status-dot"></span>
+      <span id="statusText">Disconnected</span>
+    </div>
+
+    <div class="h-px bg-white/[0.06] my-5"></div>
+
+    <!-- Session -->
+    <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Session</div>
+
+    <div class="flex flex-col gap-2 mb-4">
+      <button id="btnStart" onclick="startSession()" disabled class="ctrl-btn start-btn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M5 3l14 9-14 9V3z" />
+        </svg>
+        Start Recording
+      </button>
+      <button id="btnStop" onclick="stopSession()" disabled class="ctrl-btn stop-btn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+        </svg>
+        Stop Session
+      </button>
+    </div>
+
+    <div class="flex flex-col gap-2 bg-white/[0.025] border border-white/[0.06] rounded-xl p-3 mb-4">
+      <div class="flex justify-between items-center">
+        <span class="text-[11px] text-slate-500">Windows</span>
+        <span id="windowCount" class="font-mono text-xs font-semibold text-slate-200">0</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-[11px] text-slate-500">Duration</span>
+        <span id="sessionDur" class="font-mono text-xs font-semibold text-slate-200">0s</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-[11px] text-slate-500">Sample Rate</span>
+        <span class="font-mono text-xs font-semibold text-slate-200">50 Hz</span>
+      </div>
+    </div>
+
+    <div class="h-px bg-white/[0.06] mb-5"></div>
+    <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Analysis</div>
+
+    <button id="btnAnalyze" onclick="generateReport()" disabled class="ctrl-btn ai-btn mb-2">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path
+          d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+      </svg>
+      Generate Report
+    </button>
+
+    <div class="h-px bg-white/[0.06] my-5"></div>
+    <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Standardized Tests</div>
+
+    <button id="btnTests" onclick="openTestSuite()" class="ctrl-btn tests-btn mb-2">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 11l3 3L22 4" />
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+      </svg>
+      Run Standardized Tests
+    </button>
+
+    <div class="h-px bg-white/[0.06] my-5"></div>
+    <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">History</div>
+
+    <a href="./profiles.html" id="btnProfiles" class="ctrl-btn group mb-2" style="background:linear-gradient(135deg,rgba(139,92,246,0.1),rgba(45,212,191,0.06));
+              border:1px solid rgba(139,92,246,0.22);color:#c4b5fd;text-decoration:none;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <polyline points="16 11 18 13 22 9" />
+      </svg>
+      Patient Profile
+    </a>
+
+    <a href="./ml.html" id="btnML" class="ctrl-btn group" style="background:linear-gradient(135deg,rgba(45,212,191,0.08),rgba(139,92,246,0.06));
+              border:1px solid rgba(45,212,191,0.22);color:#99f6e4;text-decoration:none;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" />
+      </svg>
+      ML Monitor
+    </a>
+
+    <div class="flex-1"></div>
+
+    <div class="flex items-center gap-3 p-3 rounded-xl border border-violet-500/15 bg-violet-500/[0.06]">
+      <div class="text-xl leading-none">🧠</div>
+      <div class="flex-1 min-w-0">
+        <div class="text-xs font-bold text-violet-300">Biomarker Engine</div>
+        <div class="text-[10px] text-slate-500 mt-0.5">Rule-Based Analysis</div>
+      </div>
+      <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" style="box-shadow:0 0 8px rgba(52,211,153,0.6)">
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN ═══ -->
+  <main class="ml-60 flex-1 flex flex-col min-h-screen relative z-10">
+
+    <!-- Topbar -->
+    <header id="topbar" class="sticky top-0 z-40 flex items-center justify-between px-7 py-4
+           border-b border-white/[0.06] bg-[rgba(6,6,16,0.7)] backdrop-blur-xl">
+      <div>
+        <h1 class="font-grotesk text-xl font-bold tracking-tight">Clinical Dashboard</h1>
+        <p class="text-xs text-slate-500 mt-0.5">Tremor Analysis · Real-time Monitoring</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <div id="liveIndicator" class="flex items-center gap-2 px-3 py-1.5 rounded-full
+               border border-emerald-400/20 bg-emerald-400/[0.07]
+               text-emerald-400 text-[11px] font-bold tracking-widest uppercase
+               opacity-50 transition-opacity duration-300">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          LIVE
+        </div>
+        <div id="clockDisplay" class="font-mono text-sm text-slate-500"></div>
+      </div>
+    </header>
+
+    <!-- Vitals Strip -->
+    <div id="vitalsStrip" class="grid grid-cols-4 gap-3.5 px-7 py-4 border-b border-white/[0.06]">
+
+      <div class="vital-card">
+        <div class="icon-wrap teal">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Tremor Score</div>
+          <div id="liveScore" class="font-grotesk text-3xl font-extrabold leading-tight text-teal-400"
+            style="text-shadow:0 0 20px rgba(45,212,191,0.4)">—</div>
+        </div>
+        <div class="text-[11px] text-slate-600 self-end pb-0.5">/ 10</div>
+        <canvas id="scoreSparkline" width="58" height="28" class="absolute right-0 bottom-0 opacity-50"></canvas>
+      </div>
+
+      <div class="vital-card">
+        <div class="icon-wrap emerald">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10" />
+            <line x1="12" y1="20" x2="12" y2="4" />
+            <line x1="6" y1="20" x2="6" y2="14" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Session Avg</div>
+          <div id="liveAvg" class="font-grotesk text-3xl font-extrabold leading-tight text-emerald-400"
+            style="text-shadow:0 0 20px rgba(52,211,153,0.35)">—</div>
+        </div>
+        <div class="text-[11px] text-slate-600 self-end pb-0.5">mean</div>
+      </div>
+
+      <div class="vital-card">
+        <div class="icon-wrap rose">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Peak</div>
+          <div id="livePeak" class="font-grotesk text-3xl font-extrabold leading-tight text-rose-400"
+            style="text-shadow:0 0 20px rgba(251,113,133,0.35)">—</div>
+        </div>
+        <div class="text-[11px] text-slate-600 self-end pb-0.5">max</div>
+      </div>
+
+      <div class="vital-card">
+        <div class="icon-wrap violet">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v4l3 3" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Classification</div>
+          <div id="liveClass" class="font-grotesk text-lg font-bold leading-tight text-violet-400 mt-1"
+            style="text-shadow:0 0 20px rgba(167,139,250,0.35)">—</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Dashboard Grid -->
+    <div id="dashGrid" class="grid gap-4 px-7 py-4 pb-10 flex-1" style="grid-template-columns:1fr 280px 380px">
+
+      <!-- LEFT col -->
+      <div class="col-left flex flex-col gap-4">
+
+        <!-- ECG Waveform -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon teal bg-teal-400/10 border-teal-400/20 text-teal-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Live ECG Waveform</span>
+            </div>
+            <div id="chartScore"
+              class="font-mono text-[11px] text-white/20 bg-white/[0.04] border border-white/[0.06] px-3 py-1 rounded-md">
+              SCORE —</div>
+          </div>
+          <div class="relative h-52 rounded-xl overflow-hidden border border-white/[0.05]"
+            style="background:rgba(0,0,0,0.35)">
+            <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+              <div class="h-px bg-white/[0.03]"></div>
+              <div class="h-px bg-white/[0.03]"></div>
+              <div class="h-px bg-white/[0.03]"></div>
+              <div class="h-px bg-white/[0.03]"></div>
+              <div class="h-px bg-white/[0.03]"></div>
+            </div>
+            <div class="absolute right-2 inset-y-0 flex flex-col justify-between py-1 pointer-events-none">
+              <span class="font-mono text-[9px] text-white/20">10</span>
+              <span class="font-mono text-[9px] text-white/20">7.5</span>
+              <span class="font-mono text-[9px] text-white/20">5</span>
+              <span class="font-mono text-[9px] text-white/20">2.5</span>
+              <span class="font-mono text-[9px] text-white/20">0</span>
+            </div>
+            <canvas id="waveCanvas" class="chart-canvas"></canvas>
+            <div class="scanline"></div>
+          </div>
+        </div>
+
+        <!-- Frequency Bands -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon violet bg-violet-400/10 border-violet-400/20 text-violet-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <rect x="2" y="2" width="4" height="20" rx="1" />
+                  <rect x="10" y="8" width="4" height="14" rx="1" />
+                  <rect x="18" y="13" width="4" height="9" rx="1" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Frequency Band Power</span>
+            </div>
+            <div class="flex gap-2">
+              <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-rose-400/10 text-rose-400">4–6
+                Hz</span>
+              <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-400/10 text-amber-400">6–8
+                Hz</span>
+              <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-teal-400/10 text-teal-400">8–12
+                Hz</span>
+            </div>
+          </div>
+          <div class="flex flex-col gap-5">
+            <!-- B1 -->
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="font-mono text-sm font-semibold text-rose-400">4–6 Hz</span>
+                  <span class="text-[10px] text-slate-600">Resting Tremor</span>
+                </div>
+                <span id="pct1" class="font-mono text-sm font-bold text-slate-200">0%</span>
+              </div>
+              <div class="h-2.5 rounded-full overflow-hidden bg-white/[0.04] border border-white/[0.04]">
+                <div id="bar1" class="relative h-full rounded-full bg-gradient-to-r from-rose-800 to-rose-400"
+                  style="width:0%;transition:width .3s cubic-bezier(.4,0,.2,1)">
+                  <span class="absolute right-0 inset-y-0 w-4 bg-rose-400 blur-sm opacity-80 rounded-full"></span>
+                </div>
+              </div>
+            </div>
+            <!-- B2 -->
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="font-mono text-sm font-semibold text-amber-400">6–8 Hz</span>
+                  <span class="text-[10px] text-slate-600">Action Tremor</span>
+                </div>
+                <span id="pct2" class="font-mono text-sm font-bold text-slate-200">0%</span>
+              </div>
+              <div class="h-2.5 rounded-full overflow-hidden bg-white/[0.04] border border-white/[0.04]">
+                <div id="bar2" class="relative h-full rounded-full bg-gradient-to-r from-amber-800 to-amber-400"
+                  style="width:0%;transition:width .3s cubic-bezier(.4,0,.2,1)">
+                  <span class="absolute right-0 inset-y-0 w-4 bg-amber-400 blur-sm opacity-80 rounded-full"></span>
+                </div>
+              </div>
+            </div>
+            <!-- B3 -->
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="font-mono text-sm font-semibold text-teal-400">8–12 Hz</span>
+                  <span class="text-[10px] text-slate-600">Essential Tremor</span>
+                </div>
+                <span id="pct3" class="font-mono text-sm font-bold text-slate-200">0%</span>
+              </div>
+              <div class="h-2.5 rounded-full overflow-hidden bg-white/[0.04] border border-white/[0.04]">
+                <div id="bar3" class="relative h-full rounded-full bg-gradient-to-r from-teal-800 to-teal-400"
+                  style="width:0%;transition:width .3s cubic-bezier(.4,0,.2,1)">
+                  <span class="absolute right-0 inset-y-0 w-4 bg-teal-400 blur-sm opacity-80 rounded-full"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Band Spectrogram -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon bg-fuchsia-500/10 border-fuchsia-500/20 text-fuchsia-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M12 2v20M17 5v14M22 8v8M7 5v14M2 8v8" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Band Spectrogram</span>
+            </div>
+            <div class="flex gap-2 text-[10px] font-mono text-slate-500">Live Heatmap</div>
+          </div>
+          <div class="relative h-[180px] rounded-xl overflow-hidden border border-white/[0.05]"
+            style="background:rgba(0,0,0,0.35)">
+            <canvas id="specCanvas" class="w-full h-full"></canvas>
+
+            <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+              <div class="h-px bg-white/[0.05]"></div>
+              <div class="flex-1 border-b border-white/[0.05] relative"><span
+                  class="absolute right-2 top-2 text-[10px] font-mono text-teal-400 tracking-widest bg-[rgba(6,6,16,0.5)] px-1 rounded">8–12
+                  Hz</span></div>
+              <div class="flex-1 border-b border-white/[0.05] relative"><span
+                  class="absolute right-2 top-2 text-[10px] font-mono text-amber-400 tracking-widest bg-[rgba(6,6,16,0.5)] px-1 rounded">6–8
+                  Hz</span></div>
+              <div class="flex-1 relative"><span
+                  class="absolute right-2 top-2 text-[10px] font-mono text-rose-400 tracking-widest bg-[rgba(6,6,16,0.5)] px-1 rounded">4–6
+                  Hz</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- CENTER col -->
+      <div class="col-center flex flex-col gap-4">
+
+        <!-- Gauge -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon teal bg-teal-400/10 border-teal-400/20 text-teal-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M12 2a10 10 0 1 0 10 10M12 12l5-5" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Tremor Gauge</span>
+            </div>
+          </div>
+          <div class="flex flex-col items-center">
+            <svg viewBox="0 0 220 140" class="w-full max-w-[240px]">
+              <path d="M 25 120 A 85 85 0 0 1 195 120" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="16"
+                stroke-linecap="round" />
+              <path d="M 25 120 A 85 85 0 0 1 67 44" fill="none" stroke="rgba(52,211,153,0.2)" stroke-width="16"
+                stroke-linecap="round" />
+              <path d="M 67 44  A 85 85 0 0 1 153 44" fill="none" stroke="rgba(251,191,36,0.18)" stroke-width="16"
+                stroke-linecap="round" />
+              <path d="M 153 44 A 85 85 0 0 1 195 120" fill="none" stroke="rgba(239,68,68,0.18)" stroke-width="16"
+                stroke-linecap="round" />
+              <path id="gaugeArc" d="M 25 120 A 85 85 0 0 1 25 120" fill="none" stroke="url(#gGrad)" stroke-width="16"
+                stroke-linecap="round" />
+              <g id="gaugeNeedle" style="transform-origin:110px 120px;transform:rotate(-90deg)">
+                <line x1="110" y1="120" x2="110" y2="44" stroke="white" stroke-width="2" stroke-linecap="round"
+                  opacity="0.85" />
+                <circle cx="110" cy="120" r="5.5" fill="#0d0d1f" stroke="white" stroke-width="1.5" />
+              </g>
+              <defs>
+                <linearGradient id="gGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#34d399" />
+                  <stop offset="50%" stop-color="#fbbf24" />
+                  <stop offset="100%" stop-color="#ef4444" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div class="-mt-10 text-center">
+              <div id="gaugeScore"
+                class="font-grotesk text-5xl font-black tracking-tight bg-gradient-to-br from-teal-400 to-violet-400 bg-clip-text text-transparent">
+                —</div>
+              <div class="text-[9px] font-bold uppercase tracking-widest text-slate-600 mt-1">Tremor Score</div>
+              <div id="gaugeSeverity" class="text-sm font-semibold text-slate-400 mt-2">—</div>
+            </div>
+            <div class="flex justify-between w-full max-w-[220px] mt-2 px-2">
+              <span class="font-mono text-[9px] text-slate-600">0</span>
+              <span class="font-mono text-[9px] text-slate-600">2.5</span>
+              <span class="font-mono text-[9px] text-slate-600">5</span>
+              <span class="font-mono text-[9px] text-slate-600">7.5</span>
+              <span class="font-mono text-[9px] text-slate-600">10</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Distribution donut -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon amber bg-amber-400/10 border-amber-400/20 text-amber-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
+                  <path d="M22 12A10 10 0 0 0 12 2v10z" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Intensity Distribution</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-4">
+            <canvas id="distChart" width="110" height="110" class="flex-shrink-0"></canvas>
+            <div class="flex flex-col gap-2.5 flex-1">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-sm bg-emerald-400"></span><span
+                    class="text-[11px] text-slate-400">Low</span></div>
+                <span id="distLow" class="font-mono text-xs font-bold text-slate-100">—</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-sm bg-amber-400"></span><span
+                    class="text-[11px] text-slate-400">Moderate</span></div>
+                <span id="distMod" class="font-mono text-xs font-bold text-slate-100">—</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-sm bg-orange-400"></span><span
+                    class="text-[11px] text-slate-400">High</span></div>
+                <span id="distHigh" class="font-mono text-xs font-bold text-slate-100">—</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-sm bg-rose-500"></span><span
+                    class="text-[11px] text-slate-400">Very High</span></div>
+                <span id="distVHigh" class="font-mono text-xs font-bold text-slate-100">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Session Summary -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon emerald bg-emerald-400/10 border-emerald-400/20 text-emerald-400">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Session Summary</span>
+            </div>
+          </div>
+          <div class="flex items-center border-y border-white/[0.06] py-4 mb-4">
+            <div class="flex-1 text-center">
+              <div id="sumMean" class="font-grotesk text-2xl font-black text-slate-100">—</div>
+              <div class="text-[9px] font-bold uppercase tracking-widest text-slate-600 mt-1">Mean Score</div>
+            </div>
+            <div class="w-px h-10 bg-white/[0.06]"></div>
+            <div class="flex-1 text-center">
+              <div id="sumStd" class="font-grotesk text-2xl font-black text-slate-100">—</div>
+              <div class="text-[9px] font-bold uppercase tracking-widest text-slate-600 mt-1">Std Dev</div>
+            </div>
+            <div class="w-px h-10 bg-white/[0.06]"></div>
+            <div class="flex-1 text-center">
+              <div id="sumDom" class="font-grotesk text-sm font-bold text-slate-100">—</div>
+              <div class="text-[9px] font-bold uppercase tracking-widest text-slate-600 mt-1">Dom. Band</div>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-600">Within-session trend</span>
+              <span id="trendBadge"
+                class="font-mono text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-slate-500">—</span>
+            </div>
+            <div class="h-14"><canvas id="trendCanvas" class="w-full h-full"></canvas></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT col -->
+      <div class="col-right flex flex-col gap-4">
+
+        <!-- Test Results Card -->
+        <div id="testResultsCard" class="panel-card fade-item hidden"
+          style="border-color:rgba(56,189,248,0.2);background:linear-gradient(135deg,rgba(14,165,233,0.06),rgba(139,92,246,0.04))">
+          <div class="flex items-center gap-3 pb-3 mb-3 border-b border-sky-400/10">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 border border-sky-400/25"
+              style="background:linear-gradient(135deg,rgba(14,165,233,0.25),rgba(56,189,248,0.12));box-shadow:0 0 16px rgba(14,165,233,0.12)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+                <path d="M9 11l3 3L22 4" />
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="text-sm font-bold text-sky-300">Standardized Test Report</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">Rest · Postural · Movement</div>
+            </div>
+            <button onclick="closeTestResults()" class="text-slate-600 hover:text-slate-300 transition-colors">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Phase tabs -->
+          <div class="flex gap-1.5 mb-3">
+            <button id="trsTab-rest" onclick="selectTestTab('rest')" class="test-result-tab active">Rest</button>
+            <button id="trsTab-postural" onclick="selectTestTab('postural')" class="test-result-tab">Postural</button>
+            <button id="trsTab-movement" onclick="selectTestTab('movement')" class="test-result-tab">Movement</button>
+          </div>
+
+          <!-- Score bar mini chart -->
+          <div class="flex gap-3 mb-4 p-3 rounded-xl bg-white/[0.025] border border-white/[0.05]">
+            <div class="flex-1 text-center">
+              <div id="trs-rest-score" class="font-grotesk text-xl font-black text-sky-400">—</div>
+              <div class="text-[9px] uppercase tracking-widest text-slate-600 mt-0.5">Rest</div>
+            </div>
+            <div class="w-px bg-white/[0.06]"></div>
+            <div class="flex-1 text-center">
+              <div id="trs-postural-score" class="font-grotesk text-xl font-black text-violet-400">—</div>
+              <div class="text-[9px] uppercase tracking-widest text-slate-600 mt-0.5">Postural</div>
+            </div>
+            <div class="w-px bg-white/[0.06]"></div>
+            <div class="flex-1 text-center">
+              <div id="trs-movement-score" class="font-grotesk text-xl font-black text-teal-400">—</div>
+              <div class="text-[9px] uppercase tracking-widest text-slate-600 mt-0.5">Movement</div>
+            </div>
+          </div>
+
+          <!-- Phase content -->
+          <div id="trs-content"
+            class="ai-content text-[12.5px] leading-relaxed text-slate-300 max-h-48 overflow-y-auto custom-scroll">
+          </div>
+          <div id="trs-confidence" class="mt-2"></div>
+          <div id="trs-advisory" class="mt-2 p-3 rounded-xl text-[11px] leading-relaxed"
+            style="background:rgba(251,191,36,0.04);border:1px solid rgba(251,191,36,0.10);color:#a8956a"></div>
+        </div>
+
+        <!-- AI Report -->
+        <div class="panel-card fade-item flex-1 border-violet-500/20"
+          style="background:linear-gradient(135deg,rgba(139,92,246,0.07),rgba(45,212,191,0.03))">
+          <div class="flex items-center gap-3 pb-4 mb-4 border-b border-violet-500/10">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border border-violet-400/25"
+              style="background:linear-gradient(135deg,rgba(139,92,246,0.25),rgba(167,139,250,0.15));box-shadow:0 0 20px rgba(139,92,246,0.15)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                  stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="text-sm font-bold text-violet-300">Clinical Report</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">Biomarker-based Analysis</div>
+            </div>
+            <div id="aiPulse" class="w-2.5 h-2.5 rounded-full bg-violet-400/40"></div>
+          </div>
+
+          <!-- Placeholder -->
+          <div id="aiPlaceholder" class="flex flex-col items-center text-center gap-4 py-2">
+            <div id="aiOrb" class="w-20 h-20 rounded-full border border-violet-400/20 flex items-center justify-center"
+              style="background:linear-gradient(135deg,rgba(139,92,246,0.12),rgba(45,212,191,0.08))">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,0.6)"
+                stroke-width="1.2">
+                <path
+                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+            </div>
+            <p class="text-[13px] text-slate-500 leading-relaxed max-w-[260px]">
+              Connect ESP32, record a session, then click <strong class="text-violet-400">Generate Report</strong>.
+            </p>
+            <div class="flex flex-col gap-2 w-full">
+              <div
+                class="flex items-center gap-3 px-3.5 py-2.5 bg-white/[0.03] border border-white/[0.06] rounded-xl text-left">
+                <span class="font-mono text-[10px] font-bold text-violet-400/60">01</span>
+                <span class="text-[12px] text-slate-400">Enter ESP32 IP and connect</span>
+              </div>
+              <div
+                class="flex items-center gap-3 px-3.5 py-2.5 bg-white/[0.03] border border-white/[0.06] rounded-xl text-left">
+                <span class="font-mono text-[10px] font-bold text-violet-400/60">02</span>
+                <span class="text-[12px] text-slate-400">Start → Stop session</span>
+              </div>
+              <div
+                class="flex items-center gap-3 px-3.5 py-2.5 bg-white/[0.03] border border-white/[0.06] rounded-xl text-left">
+                <span class="font-mono text-[10px] font-bold text-violet-400/60">03</span>
+                <span class="text-[12px] text-slate-400">Click Generate Report</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Result -->
+          <div id="aiResult" class="hidden flex-col gap-3.5">
+            <div class="ai-content text-[13px] leading-relaxed text-slate-300" id="aiContent"></div>
+            <div id="aiConfidence"></div>
+            <div id="aiAdvisory" class="p-3 rounded-xl text-[12px] leading-relaxed"
+              style="background:rgba(251,191,36,0.05);border:1px solid rgba(251,191,36,0.12);color:#a8956a"></div>
+          </div>
+        </div>
+
+        <!-- Event Log -->
+        <div class="panel-card fade-item">
+          <div class="panel-header">
+            <div class="panel-label">
+              <div class="panel-icon muted">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path
+                    d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
+                </svg>
+              </div>
+              <span class="panel-label-text">Event Log</span>
+            </div>
+            <button onclick="document.getElementById('eventLog').innerHTML=''" class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500
+                   bg-white/[0.04] border border-white/[0.07] px-2.5 py-1 rounded-lg
+                   hover:bg-white/[0.07] hover:text-slate-300 transition-all duration-150">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+              </svg>
+              Clear
+            </button>
+          </div>
+          <pre id="eventLog" class="event-log"></pre>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- ES module entry — imports GSAP and Chart.js from node_modules -->
+
+  <!-- ═══ STANDARDIZED TEST MODAL ═══ -->
+  <div id="testModal" class="test-modal hidden">
+    <!-- Backdrop blur bg -->
+    <div class="absolute inset-0" style="background:rgba(4,4,16,0.94);backdrop-filter:blur(24px)"></div>
+
+    <div class="relative z-10 flex flex-col items-center justify-center w-full h-full px-6">
+
+      <!-- Phase header -->
+      <div class="flex items-center gap-3 mb-6">
+        <div id="tmPhaseBadge" class="test-phase-badge">Phase 1/3</div>
+        <div id="tmPhaseLabel" class="font-grotesk text-2xl font-bold text-white">Rest Test</div>
+        <div id="tmDemoTag" class="hidden text-[10px] font-bold px-2 py-0.5 rounded-full"
+          style="background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);color:#fbbf24">DEMO</div>
+      </div>
+
+      <!-- Instruction text -->
+      <p id="tmInstruction" class="text-slate-400 text-sm text-center max-w-sm mb-8 leading-relaxed"></p>
+
+      <!-- Animation + countdown ring row -->
+      <div class="flex items-center gap-12">
+
+        <!-- Phase SVG animation area -->
+        <div id="tmAnimArea" class="tm-anim-area">
+
+          <!-- REST: seated figure, hands resting on lap -->
+          <svg id="anim-rest" class="phase-anim" viewBox="0 0 110 138" fill="none" stroke-linecap="round"
+            stroke-linejoin="round">
+            <!-- head -->
+            <circle cx="55" cy="14" r="11" stroke="rgba(45,212,191,0.85)" stroke-width="5.5" />
+            <!-- torso -->
+            <line x1="55" y1="25" x2="55" y2="71" stroke="rgba(45,212,191,0.85)" stroke-width="6" />
+            <!-- thighs horizontal (seated) -->
+            <line x1="28" y1="71" x2="82" y2="71" stroke="rgba(45,212,191,0.8)" stroke-width="6" />
+            <!-- lower legs hanging -->
+            <line x1="32" y1="71" x2="32" y2="112" stroke="rgba(45,212,191,0.75)" stroke-width="6" />
+            <line x1="78" y1="71" x2="78" y2="112" stroke="rgba(45,212,191,0.75)" stroke-width="6" />
+            <!-- feet -->
+            <line x1="20" y1="112" x2="44" y2="112" stroke="rgba(45,212,191,0.7)" stroke-width="5.5" />
+            <line x1="66" y1="112" x2="90" y2="112" stroke="rgba(45,212,191,0.7)" stroke-width="5.5" />
+            <!-- left arm down to lap -->
+            <line x1="48" y1="38" x2="30" y2="63" stroke="rgba(45,212,191,0.82)" stroke-width="5.5" />
+            <line id="rf1" x1="30" y1="63" x2="30" y2="73" stroke="rgba(45,212,191,0.82)" stroke-width="5.5" />
+            <!-- right arm down to lap -->
+            <line x1="62" y1="38" x2="80" y2="63" stroke="rgba(45,212,191,0.72)" stroke-width="5.5" />
+            <line id="rf2" x1="80" y1="63" x2="80" y2="73" stroke="rgba(45,212,191,0.72)" stroke-width="5.5" />
+            <!-- chair -->
+            <line x1="16" y1="73" x2="94" y2="73" stroke="rgba(45,212,191,0.18)" stroke-width="2.5" />
+            <!-- pulse ring -->
+            <circle id="restPulse" cx="55" cy="67" r="46" stroke="rgba(45,212,191,0.1)" stroke-width="1.5"
+              fill="none" />
+          </svg>
+
+          <!-- POSTURAL: standing figure, arms extended wide at shoulder height -->
+          <svg id="anim-postural" class="phase-anim hidden" viewBox="0 0 200 142" fill="none" stroke-linecap="round"
+            stroke-linejoin="round">
+            <!-- head -->
+            <circle cx="100" cy="14" r="11" stroke="rgba(139,92,246,0.88)" stroke-width="5.5" />
+            <!-- torso -->
+            <line x1="100" y1="25" x2="100" y2="88" stroke="rgba(139,92,246,0.88)" stroke-width="6" />
+            <!-- left arm full horizontal -->
+            <g id="armLeft">
+              <line x1="100" y1="48" x2="14" y2="48" stroke="rgba(139,92,246,0.88)" stroke-width="6" />
+            </g>
+            <!-- right arm full horizontal -->
+            <g id="armRight">
+              <line x1="100" y1="48" x2="186" y2="48" stroke="rgba(139,92,246,0.88)" stroke-width="6" />
+            </g>
+            <!-- left leg -->
+            <line x1="93" y1="88" x2="80" y2="136" stroke="rgba(139,92,246,0.82)" stroke-width="6" />
+            <!-- right leg -->
+            <line x1="107" y1="88" x2="120" y2="136" stroke="rgba(139,92,246,0.82)" stroke-width="6" />
+            <!-- shoulder guide -->
+            <line x1="8" y1="48" x2="192" y2="48" stroke="rgba(139,92,246,0.06)" stroke-width="1"
+              stroke-dasharray="5 7" />
+          </svg>
+
+          <!-- MOVEMENT: standing figure, right arm raised with finger touching nose -->
+          <svg id="anim-movement" class="phase-anim hidden" viewBox="0 0 138 158" fill="none" stroke-linecap="round"
+            stroke-linejoin="round">
+            <defs>
+              <filter id="glow">
+                <feGaussianBlur stdDeviation="2.5" result="b" />
+                <feComposite in="SourceGraphic" in2="b" operator="over" />
+              </filter>
+            </defs>
+            <!-- head -->
+            <circle cx="62" cy="14" r="11" stroke="rgba(45,212,191,0.88)" stroke-width="5.5" />
+            <!-- torso -->
+            <line x1="62" y1="25" x2="62" y2="90" stroke="rgba(45,212,191,0.88)" stroke-width="6" />
+            <!-- left arm down -->
+            <line x1="56" y1="42" x2="40" y2="80" stroke="rgba(45,212,191,0.55)" stroke-width="5.5" />
+            <!-- right upper arm — raised out -->
+            <line x1="68" y1="42" x2="96" y2="28" stroke="rgba(45,212,191,0.88)" stroke-width="5.5" />
+            <!-- right forearm — bends back to nose -->
+            <line x1="96" y1="28" x2="74" y2="16" stroke="rgba(45,212,191,0.88)" stroke-width="5.5" />
+            <!-- fingertip at nose (bright highlight) -->
+            <circle cx="68" cy="15" r="3.5" fill="rgba(45,212,191,0.9)" stroke="rgba(45,212,191,1)"
+              stroke-width="1.5" />
+            <!-- left leg -->
+            <line x1="56" y1="90" x2="46" y2="148" stroke="rgba(45,212,191,0.78)" stroke-width="6" />
+            <!-- right leg -->
+            <line x1="68" y1="90" x2="78" y2="148" stroke="rgba(45,212,191,0.78)" stroke-width="6" />
+            <!-- arc path (animation track) -->
+            <path id="mvPath" d="M 108 74 Q 120 16 74 16" stroke="rgba(45,212,191,0.13)" stroke-width="1.5"
+              stroke-dasharray="4 5" fill="none" />
+            <!-- target -->
+            <circle cx="110" cy="76" r="6" stroke="rgba(167,139,250,0.55)" stroke-width="2"
+              fill="rgba(167,139,250,0.08)" />
+            <!-- animated dot -->
+            <circle id="mvDot" cx="110" cy="76" r="5" fill="rgba(45,212,191,0.95)" filter="url(#glow)" />
+          </svg>
+
+        </div>
+
+        <!-- Countdown ring -->
+        <div class="relative flex items-center justify-center" style="width:140px;height:140px">
+          <svg width="140" height="140" style="transform:rotate(-90deg)">
+            <circle cx="70" cy="70" r="58" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="none" />
+            <circle id="cdRing" cx="70" cy="70" r="58" stroke="url(#cdGrad)" stroke-width="8" fill="none"
+              stroke-linecap="round" stroke-dasharray="364.4" stroke-dashoffset="0"
+              style="transition:stroke-dashoffset 1s linear" />
+            <defs>
+              <linearGradient id="cdGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#2dd4bf" />
+                <stop offset="100%" stop-color="#8b5cf6" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="absolute text-center">
+            <div id="cdSeconds" class="font-grotesk text-4xl font-black text-white">35</div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 mt-0.5">seconds</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Live score badge -->
+      <div class="flex items-center gap-3 mt-8 px-5 py-3 rounded-2xl border border-white/[0.08]"
+        style="background:rgba(255,255,255,0.03)">
+        <span class="text-[11px] font-bold uppercase tracking-widest text-slate-500">Live Score</span>
+        <span id="tmLiveScore" class="font-grotesk text-2xl font-black text-teal-400"
+          style="text-shadow:0 0 20px rgba(45,212,191,0.4)">—</span>
+        <span class="text-[11px] text-slate-600">/ 10</span>
+        <div class="w-px h-5 bg-white/[0.08] mx-1"></div>
+        <span class="text-[11px] font-bold uppercase tracking-widest text-slate-500">Windows</span>
+        <span id="tmWindowCount" class="font-mono text-sm font-bold text-slate-300">0</span>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex gap-3 mt-6">
+        <button onclick="skipTestPhase()" class="px-5 py-2.5 rounded-xl border border-white/[0.08] text-[13px] font-semibold text-slate-400
+               hover:bg-white/[0.05] hover:text-slate-200 transition-all duration-200">
+          Skip Phase
+        </button>
+        <button onclick="abortTestSuite()" class="px-5 py-2.5 rounded-xl border border-rose-500/25 bg-rose-500/10 text-[13px] font-semibold text-rose-400
+               hover:bg-rose-500/20 transition-all duration-200">
+          Abort Test
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+
+</html>

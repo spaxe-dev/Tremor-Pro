@@ -402,6 +402,14 @@
   box-shadow: 0 0 18px rgba(56, 189, 248, 0.12);
 }
 
+/* Profiles sidebar link */
+#btnProfiles:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.18), rgba(45, 212, 191, 0.1)) !important;
+  border-color: rgba(139, 92, 246, 0.4) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 0 18px rgba(139, 92, 246, 0.12);
+}
+
 /* Test results card — phase tabs */
 .test-result-tab {
   flex: 1;

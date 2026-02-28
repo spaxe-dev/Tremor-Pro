@@ -1,6 +1,7 @@
 ## TremorSense AI – How to Run Everything
 
-This guide shows the **exact steps** to run the Tremor dashboard, backend, and the new profile/trend view on your local machine.
+This guide shows the **exact steps** to run the Tremor dashboard and backend on your local machine.
+No external AI API key is needed — the system uses **rule-based biomarker interpretation** to generate clinical reports directly from your sensor data.
 
 ---
 
@@ -121,15 +122,14 @@ VITE_BACKEND_URL=http://localhost:8000
    - The dashboard accumulates windows from the SSE `bands` stream.
 5. Click **Stop Session**:
    - This finalizes the in-session statistics.
-6. Click **Generate AI Report**:
+6. Click **Generate Report**:
    - The frontend builds a `SessionSummary` from your biomarkers.
-   - Sends it to `POST /analyze` on the backend (MedGemma).
+   - Sends it to `POST /profile/session/direct` on the backend.
+   - The backend generates a **rule-based clinical report** from the raw biomarkers (no MedGemma / external AI).
+   - Stores the session + report into **`profiles.db`**.
    - Shows the clinical report on the right.
-   - **Also sends** the session + AI text to:
-     - `POST /profile/session`
-   - The backend stores the session into **`profiles.db`**.
 
-Every time you generate an AI report, that session is saved and appears in the profile view.
+Every time you generate a report, that session is saved and appears in the profile view.
 
 ---
 
@@ -181,8 +181,10 @@ The **profile history is preserved** because it lives in `profiles.db`, not in m
 - **Backend (FastAPI)**
   - Base: `http://localhost:8000`
   - `GET /health` – health check
-  - `POST /analyze` – MedGemma tremor analysis
-  - `POST /profile/session` – store one analyzed session
+  - `POST /analyze` – MedGemma tremor analysis (legacy, still available)
+  - `POST /profile/session/direct` – **analyse + store** session (rule-based, no AI key needed)
+  - `POST /tests/analyze-phase/direct` – rule-based analysis for a standardized test phase
+  - `POST /profile/session` – store one pre-analysed session (legacy)
   - `GET /profile/sessions` – list all stored sessions
   - `GET /profile/sessions/{session_id}` – full details for one session
 

@@ -14,11 +14,22 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional, List
 
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file (KAGGLE_MEDGEMMA_URL, etc.)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import httpx
+
+# ML module (Random Forest tremor classifier)
+try:
+    from ml.model import get_classifier, classify_window, classify_batch, is_model_available
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    print("[ML] ⚠ ML module not available (missing dependencies?)")
 
 # ──────────────────────────────────────────────
 # Pydantic Models
@@ -119,6 +130,10 @@ class TestPhaseResult(BaseModel):
     duration_seconds: float
     session: SessionSummary = SessionSummary()
 
+
+class DirectSessionRequest(BaseModel):
+    session: SessionSummary
+
 # ──────────────────────────────────────────────
 # SQLite (built-in) setup (local-only profiles DB)
 # ──────────────────────────────────────────────
@@ -176,6 +191,22 @@ app.add_middleware(
 async def on_startup() -> None:
     # Ensure the local SQLite database and tables exist
     init_db()
+    # Log MedGemma configuration
+    if KAGGLE_MEDGEMMA_URL:
+        print(f"✅ KAGGLE_MEDGEMMA_URL configured: {KAGGLE_MEDGEMMA_URL}")
+        print("   AI reports will use MedGemma via Kaggle ngrok tunnel")
+    elif HF_API_TOKEN:
+        print("✅ HF_API_TOKEN configured — using HuggingFace Inference API")
+    else:
+        print("⚠️  No MedGemma backend configured — using rule-based analysis only")
+        print("   Set KAGGLE_MEDGEMMA_URL=https://xxxx.ngrok-free.app to enable AI")
+    # Load Random Forest model
+    if ML_AVAILABLE:
+        clf = get_classifier()
+        if clf:
+            print(f"🌲 Random Forest model loaded ({clf.n_estimators} trees)")
+        else:
+            print("🌲 No trained RF model found — train with: python -m ml.train_model")
 
 # ──────────────────────────────────────────────
 # Prompt Builder
@@ -276,44 +307,75 @@ HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")
 MEDGEMMA_MODEL = "google/medgemma-4b-it"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{MEDGEMMA_MODEL}"
 
+# Kaggle-hosted MedGemma via ngrok tunnel
+KAGGLE_MEDGEMMA_URL = os.environ.get("KAGGLE_MEDGEMMA_URL", "").rstrip("/")
+
+
+async def call_kaggle_medgemma(system_prompt: str, user_prompt: str, max_new_tokens: int = 1024) -> str:
+    """
+    Call MedGemma via the Kaggle notebook exposed through ngrok.
+    The Kaggle Flask API expects:
+      POST /predict  {"system_prompt": ..., "user_prompt": ..., "max_new_tokens": ...}
+    Returns: {"generated_text": "..."}
+    """
+    predict_url = KAGGLE_MEDGEMMA_URL + "/predict"
+    payload = {
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "max_new_tokens": max_new_tokens,
+    }
+
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(predict_url, json=payload)
+        resp.raise_for_status()
+        result = resp.json()
+        return result.get("generated_text", "No response generated.")
+
 
 async def call_medgemma(system_prompt: str, user_prompt: str) -> str:
     """
-    Call MedGemma 4B via HuggingFace Inference API.
-    Falls back to a placeholder response if the API key is missing or the call fails.
+    Call MedGemma 4B — tries Kaggle ngrok first, then HuggingFace API,
+    then falls back to placeholder.
     """
 
-    if not HF_API_TOKEN:
-        return _placeholder_response(user_prompt)
+    # 1. Try Kaggle-hosted MedGemma via ngrok
+    if KAGGLE_MEDGEMMA_URL:
+        try:
+            print(f"[MedGemma] Calling Kaggle endpoint: {KAGGLE_MEDGEMMA_URL}/predict")
+            result = await call_kaggle_medgemma(system_prompt, user_prompt)
+            print(f"[MedGemma] Kaggle response received ({len(result)} chars)")
+            return result
+        except Exception as e:
+            print(f"[MedGemma] Kaggle API error: {e} — falling back…")
 
-    headers = {
-        "Authorization": f"Bearer {HF_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
+    # 2. Try HuggingFace Inference API
+    if HF_API_TOKEN:
+        headers = {
+            "Authorization": f"Bearer {HF_API_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "inputs": f"<start_of_turn>system\n{system_prompt}<end_of_turn>\n<start_of_turn>user\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n",
+            "parameters": {
+                "max_new_tokens": 1024,
+                "temperature": 0.4,
+                "top_p": 0.9,
+                "return_full_text": False,
+            },
+        }
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(HF_API_URL, json=payload, headers=headers)
+                resp.raise_for_status()
+                result = resp.json()
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get("generated_text", "No response generated.")
+                return str(result)
+        except Exception as e:
+            print(f"[MedGemma HF API error] {e}")
 
-    payload = {
-        "inputs": f"<start_of_turn>system\n{system_prompt}<end_of_turn>\n<start_of_turn>user\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n",
-        "parameters": {
-            "max_new_tokens": 1024,
-            "temperature": 0.4,
-            "top_p": 0.9,
-            "return_full_text": False,
-        },
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(HF_API_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            result = resp.json()
-
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get("generated_text", "No response generated.")
-            return str(result)
-
-    except Exception as e:
-        print(f"[MedGemma API error] {e}")
-        return _placeholder_response(user_prompt)
+    # 3. Placeholder fallback
+    return _placeholder_response(user_prompt)
 
 
 def _placeholder_response(user_prompt: str) -> str:
@@ -348,7 +410,8 @@ def _placeholder_response(user_prompt: str) -> str:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "Tremor Clinical AI Backend"}
+    ai_backend = "kaggle_medgemma" if KAGGLE_MEDGEMMA_URL else ("huggingface" if HF_API_TOKEN else "rule_based")
+    return {"status": "ok", "service": "Tremor Clinical AI Backend", "ai_backend": ai_backend}
 
 
 @app.post("/analyze", response_model=ClinicalResponse)
@@ -423,6 +486,306 @@ async def analyze_test_phase(payload: TestPhaseResult):
         confidence_level=confidence,
         advisory_note=advisory,
     )
+
+
+# ──────────────────────────────────────────────
+# Rule-Based Clinical Interpretation (no AI)
+# ──────────────────────────────────────────────
+
+def _rule_based_analysis(s: SessionSummary, phase_label: str = "") -> ClinicalResponse:
+    """
+    Generate a structured clinical report from raw biomarkers using
+    deterministic rules. No external API call needed.
+    """
+    ts = s.intensity_profile.tremor_score
+    fp = s.frequency_profile
+    dist = s.intensity_distribution
+    var = s.variability_profile
+    wt = s.within_session_trend
+    mt = s.multi_session_trend
+    condition = s.metadata.condition or "rest"
+
+    # ── Severity ──────────────────────────────────
+    mean = ts.mean
+    if mean < 1.5:
+        sev_label, sev_desc = "Minimal", "Tremor intensity is within the minimal range, suggesting negligible motor disruption."
+    elif mean < 2.5:
+        sev_label, sev_desc = "Mild", "Tremor intensity is mild. This level is typically perceptible but unlikely to interfere with daily activities."
+    elif mean < 5.0:
+        sev_label, sev_desc = "Moderate", "Tremor intensity is moderate. This may cause noticeable difficulty with fine motor tasks such as writing or eating."
+    elif mean < 7.5:
+        sev_label, sev_desc = "Moderate-Severe", "Tremor intensity is in the moderate-to-severe range. Functional impairment is likely during most manual activities."
+    else:
+        sev_label, sev_desc = "Severe", "Tremor intensity is severe. Significant functional impairment is expected across daily living tasks."
+
+    # ── Dominant band → phenotype hints ───────────
+    dom = format_band(fp.dominant_band)
+    bp = fp.band_power_mean
+    if fp.dominant_band == "4_6_hz":
+        band_hint = (
+            f"The dominant frequency band is {dom} (power {bp.hz_4_6:.3f}), "
+            "which is characteristic of a resting/Parkinsonian-type tremor pattern."
+        )
+    elif fp.dominant_band == "6_8_hz":
+        band_hint = (
+            f"The dominant frequency band is {dom} (power {bp.hz_6_8:.3f}), "
+            "which overlaps with the typical range for essential tremor."
+        )
+    else:
+        band_hint = (
+            f"The dominant frequency band is {dom} (power {bp.hz_8_12:.3f}), "
+            "which may indicate a higher-frequency physiological or enhanced essential tremor."
+        )
+
+    # ── Phenotype reasoning by condition ──────────
+    if condition == "rest":
+        pheno = (
+            "During the rest condition, the detected tremor is most consistent with a **resting tremor** phenotype. "
+            "Resting tremor is commonly associated with Parkinsonian-spectrum conditions, though other aetiologies exist."
+        )
+    elif condition == "postural":
+        pheno = (
+            "During the postural hold, tremor activity is consistent with a **postural tremor** phenotype. "
+            "This pattern is frequently seen in essential tremor and enhanced physiological tremor."
+        )
+    elif condition == "movement":
+        pheno = (
+            "During the movement (kinetic) test, tremor characteristics suggest a **kinetic/intention tremor** phenotype. "
+            "This pattern can be associated with cerebellar dysfunction or advanced essential tremor."
+        )
+    else:
+        pheno = (
+            f"Under the '{condition}' condition, no specific phenotype mapping is available. "
+            "Clinical correlation is recommended."
+        )
+
+    # ── Stability / Variability ───────────────────
+    cv = var.coefficient_of_variation
+    se = var.spectral_entropy
+    if cv < 0.15:
+        stab = "Tremor pattern is **highly stable** with low variability, indicating a consistent oscillatory source."
+    elif cv < 0.35:
+        stab = "Tremor shows **moderate variability**, which is common in functional tremor states."
+    else:
+        stab = "Tremor is **highly variable**, suggesting fluctuating motor drive or possible mixed aetiology."
+
+    if se < 0.4:
+        entropy_note = "Low spectral entropy indicates a narrow-band, well-defined oscillation."
+    elif se < 0.7:
+        entropy_note = "Moderate spectral entropy suggests energy is spread across multiple frequency bands."
+    else:
+        entropy_note = "High spectral entropy indicates broad-spectrum activity without a clear dominant oscillation."
+
+    # ── Within-session trend ──────────────────────
+    slope = wt.linear_slope_per_minute_score_units
+    fatigue = wt.fatigue_pattern_detected
+    if fatigue or slope > 0.1:
+        trend_note = (
+            f"Within-session trend shows an **upward drift** (slope {slope:+.4f} score-units/min), "
+            "suggesting possible fatigue-related amplification. This is clinically relevant for medication timing."
+        )
+    elif slope < -0.1:
+        trend_note = (
+            f"Within-session trend shows a **downward drift** (slope {slope:+.4f} score-units/min), "
+            "indicating tremor attenuation over time — possibly adaptation or relaxation effect."
+        )
+    else:
+        trend_note = "Within-session intensity remained **stable** throughout the recording."
+
+    # ── Distribution summary ──────────────────────
+    dist_note = (
+        f"Intensity distribution: {dist.low_fraction*100:.0f}% low, "
+        f"{dist.moderate_fraction*100:.0f}% moderate, "
+        f"{dist.high_fraction*100:.0f}% high, "
+        f"{dist.very_high_fraction*100:.0f}% very-high."
+    )
+
+    stats_note = (
+        f"Score statistics — mean: {ts.mean:.2f}, std: {ts.std:.2f}, "
+        f"range: [{ts.min:.2f} – {ts.max:.2f}], "
+        f"median (p50): {ts.p50:.2f}, p90: {ts.p90:.2f}."
+    )
+
+    # ── Confidence ────────────────────────────────
+    dur = s.metadata.duration_minutes
+    if dur >= 0.5 and cv < 0.3:
+        conf = "High"
+    elif dur >= 0.25:
+        conf = "Moderate"
+    else:
+        conf = "Low"
+
+    # ── Assemble report ───────────────────────────
+    phase_str = f" [{phase_label.upper()} PHASE]" if phase_label else ""
+    sections = [
+        f"## Tremor Analysis Report{phase_str}\n",
+        f"**Severity: {sev_label}**\n{sev_desc}\n",
+        f"**Frequency Profile**\n{band_hint}\n",
+        f"**Phenotype Assessment**\n{pheno}\n",
+        f"**Stability & Variability**\n{stab} {entropy_note}\n",
+        f"**Intensity Distribution**\n{dist_note}\n{stats_note}\n",
+        f"**Within-Session Trend**\n{trend_note}\n",
+    ]
+
+    if mt.severity_change_percent and mt.severity_change_percent != "N/A (first session)":
+        sections.append(
+            f"**Multi-Session Trend**\n"
+            f"Weekly slope: {mt.tremor_score_weekly_slope}, "
+            f"severity change: {mt.severity_change_percent}. "
+            f"Band consistency: {mt.dominant_band_consistency_last_3}. "
+            f"Band shift detected: {'Yes' if mt.band_shift_detected else 'No'}.\n"
+        )
+
+    advisory = (
+        "This analysis is generated from raw sensor biomarkers using deterministic rules "
+        "and does not constitute a medical diagnosis. Results should be reviewed by a "
+        "qualified healthcare professional. Tremor patterns may vary based on medication, "
+        "fatigue, stress, and other clinical factors not captured by sensor data alone."
+    )
+
+    return ClinicalResponse(
+        clinical_summary="\n".join(sections),
+        confidence_level=conf,
+        advisory_note=advisory,
+    )
+
+
+@app.post("/profile/session/direct", response_model=StoredSession)
+async def store_session_direct(payload: DirectSessionRequest):
+    """
+    Analyse a session and persist it into the local SQLite profile database.
+    Tries MedGemma (via Kaggle ngrok) first for AI-powered analysis;
+    falls back to rule-based biomarker interpretation if unavailable.
+    """
+    report = None
+    used_ai = False
+
+    # Try MedGemma via Kaggle ngrok (call directly so failures raise)
+    if KAGGLE_MEDGEMMA_URL:
+        try:
+            user_prompt = build_user_prompt(payload.session)
+            print(f"[Session] Calling Kaggle MedGemma at {KAGGLE_MEDGEMMA_URL}/predict …")
+            raw_response = await call_kaggle_medgemma(SYSTEM_INSTRUCTION, user_prompt)
+            print(f"[Session] ✅ MedGemma AI response received ({len(raw_response)} chars)")
+
+            confidence = "Moderate"
+            for level in ["High", "Low", "Moderate"]:
+                if level.lower() in raw_response.lower():
+                    confidence = level
+                    break
+
+            advisory = (
+                "This analysis is generated by MedGemma AI clinical reasoning assistant "
+                "and does not constitute a medical diagnosis. Results should be reviewed "
+                "by a qualified healthcare professional."
+            )
+            report = ClinicalResponse(
+                clinical_summary=raw_response,
+                confidence_level=confidence,
+                advisory_note=advisory,
+            )
+            used_ai = True
+        except Exception as e:
+            print(f"[Session] ❌ Kaggle MedGemma failed: {e}")
+            print("[Session] Falling back to rule-based analysis")
+
+    # Fallback to rule-based (uses your actual sensor data)
+    if report is None:
+        report = _rule_based_analysis(payload.session)
+        print("[Session] 📊 Using rule-based analysis")
+
+    s = payload.session
+    mean_score = s.intensity_profile.tremor_score.mean
+    dom_band = s.frequency_profile.dominant_band or ""
+    ts_val = s.metadata.timestamp or datetime.utcnow().isoformat()
+    session_id = s.metadata.session_id or f"S{int(datetime.now(tz=timezone.utc).timestamp())}"
+    created_at = datetime.now(tz=timezone.utc).isoformat()
+
+    conn = _connect_db()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO sessions
+              (session_id, timestamp, duration_minutes, mean_score, dominant_band, confidence_level, clinical_summary, raw_summary_json, created_at)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                ts_val,
+                float(s.metadata.duration_minutes),
+                float(mean_score),
+                str(dom_band),
+                str(report.confidence_level),
+                str(report.clinical_summary),
+                json.dumps(s.model_dump()),
+                created_at,
+            ),
+        )
+        conn.commit()
+        new_id = int(cur.lastrowid)
+    finally:
+        conn.close()
+
+    return StoredSession(
+        id=new_id,
+        session_id=session_id,
+        timestamp=ts_val,
+        duration_minutes=float(s.metadata.duration_minutes),
+        mean_score=float(mean_score),
+        dominant_band=str(dom_band),
+        confidence_level=str(report.confidence_level),
+    )
+
+
+@app.post("/tests/analyze-phase/direct", response_model=ClinicalResponse)
+async def analyze_test_phase_direct(payload: TestPhaseResult):
+    """
+    Analyse a single standardized test phase.
+    Tries MedGemma (via Kaggle ngrok) first; falls back to rule-based.
+    """
+    payload.session.metadata.condition = payload.phase
+    if payload.session.metadata.duration_minutes == 0 and payload.duration_seconds > 0:
+        payload.session.metadata.duration_minutes = round(payload.duration_seconds / 60, 3)
+
+    # Try MedGemma via Kaggle ngrok (call directly so failures raise)
+    if KAGGLE_MEDGEMMA_URL:
+        try:
+            user_prompt = build_user_prompt(payload.session)
+            phase_header = (
+                f"STANDARDIZED TEST — PHASE: {payload.phase.upper()}\n"
+                f"Duration: {payload.duration_seconds:.0f} seconds\n"
+                "The patient performed the standardized clinical tremor test as described below.\n"
+                "Focus analysis specifically on the tremor characteristics relevant to this test type:\n"
+                " • Rest: resting tremor (Parkinsonian-type characteristics)\n"
+                " • Postural: postural/sustained-position tremor (essential tremor / dystonic features)\n"
+                " • Movement: action/kinetic tremor (cerebellar / essential tremor features)\n\n"
+            )
+            print(f"[Test Phase] Calling Kaggle MedGemma for {payload.phase} …")
+            raw_response = await call_kaggle_medgemma(SYSTEM_INSTRUCTION, phase_header + user_prompt)
+            print(f"[Test Phase] ✅ MedGemma response for {payload.phase} ({len(raw_response)} chars)")
+
+            confidence = "Moderate"
+            for level in ["High", "Low", "Moderate"]:
+                if level.lower() in raw_response.lower():
+                    confidence = level
+                    break
+
+            advisory = (
+                f"[{payload.phase.capitalize()} Phase] This AI analysis is generated by MedGemma "
+                f"for the standardized {payload.phase} tremor test and does not constitute a medical "
+                "diagnosis. Results must be corroborated with clinical examination by a qualified neurologist."
+            )
+            return ClinicalResponse(
+                clinical_summary=raw_response,
+                confidence_level=confidence,
+                advisory_note=advisory,
+            )
+        except Exception as e:
+            print(f"[Test Phase] ❌ Kaggle MedGemma failed for {payload.phase}: {e}")
+            print(f"[Test Phase] Falling back to rule-based for {payload.phase}")
+
+    return _rule_based_analysis(payload.session, phase_label=payload.phase)
 
 
 # ──────────────────────────────────────────────
@@ -541,6 +904,19 @@ async def get_session_detail(session_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    clinical_text = str(row["clinical_summary"])
+    # Detect if rule-based (starts with ## Tremor Analysis Report) or AI-generated
+    is_rule_based = clinical_text.startswith("## Tremor Analysis Report")
+    advisory = (
+        "This analysis is generated from raw sensor biomarkers using deterministic rules "
+        "and does not constitute a medical diagnosis. Results should be reviewed by a "
+        "qualified healthcare professional."
+    ) if is_rule_based else (
+        "This analysis is generated by MedGemma AI clinical reasoning assistant "
+        "and does not constitute a medical diagnosis. Results should be reviewed "
+        "by a qualified healthcare professional."
+    )
+
     return {
         "id": int(row["id"]),
         "session_id": str(row["session_id"]),
@@ -549,8 +925,63 @@ async def get_session_detail(session_id: str):
         "mean_score": float(row["mean_score"]),
         "dominant_band": str(row["dominant_band"]),
         "confidence_level": str(row["confidence_level"]),
-        "clinical_summary": str(row["clinical_summary"]),
+        "clinical_summary": clinical_text,
+        "advisory_note": advisory,
         "raw_summary": json.loads(row["raw_summary_json"] or "{}"),
+    }
+
+
+# ──────────────────────────────────────────────
+# ML Classification Endpoints (Random Forest)
+# ──────────────────────────────────────────────
+
+class MLWindowRequest(BaseModel):
+    b1: float
+    b2: float
+    b3: float
+    meanNorm: float = 0.0
+
+class MLBatchRequest(BaseModel):
+    windows: List[dict]
+
+
+@app.post("/ml/classify")
+async def ml_classify_single(req: MLWindowRequest):
+    """
+    Classify a single ESP32 window using the Random Forest model.
+    Falls back to rule-based if no model is trained.
+    """
+    if not ML_AVAILABLE:
+        raise HTTPException(503, "ML module not available")
+    result = classify_window(req.b1, req.b2, req.b3, req.meanNorm)
+    return result
+
+
+@app.post("/ml/classify-batch")
+async def ml_classify_batch(req: MLBatchRequest):
+    """
+    Classify a batch of windows (e.g. a full session) and return
+    aggregate predictions with per-window breakdown.
+    """
+    if not ML_AVAILABLE:
+        raise HTTPException(503, "ML module not available")
+    result = classify_batch(req.windows)
+    return result
+
+
+@app.get("/ml/status")
+async def ml_status():
+    """Check if the ML model is loaded and ready."""
+    if not ML_AVAILABLE:
+        return {"available": False, "reason": "ML module not installed"}
+    model_ready = is_model_available()
+    clf = get_classifier() if model_ready else None
+    return {
+        "available": model_ready,
+        "model_loaded": clf is not None,
+        "n_estimators": clf.n_estimators if clf else None,
+        "n_features": clf.n_features_in_ if clf else None,
+        "classes": ["no_tremor", "parkinsonian", "essential", "physiological"],
     }
 
 

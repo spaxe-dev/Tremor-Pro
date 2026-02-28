@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+
+<head>
+    <meta charset="UTF-8">
+    <title>TremorSense AI — ML Classification Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Real-time Random Forest tremor classification logs and model training guide.">
+    <link rel="stylesheet" href="./dashboard.css">
+    <style>
+        /* ── ML-page specific styles ── */
+        .ml-log-entry {
+            display: grid;
+            grid-template-columns: 90px 1fr 100px 90px 70px;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 12px;
+            transition: background 0.15s;
+        }
+
+        .ml-log-entry:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .ml-log-entry.is-tremor {
+            border-left: 3px solid rgba(251, 113, 133, 0.6);
+        }
+
+        .ml-log-entry.no-tremor {
+            border-left: 3px solid rgba(52, 211, 153, 0.5);
+        }
+
+        .prob-bar-wrap {
+            display: flex;
+            gap: 2px;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .prob-bar-wrap>div {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+
+        .prob-no {
+            background: #34d399;
+        }
+
+        .prob-pk {
+            background: #f472b6;
+        }
+
+        .prob-es {
+            background: #a78bfa;
+        }
+
+        .prob-ph {
+            background: #fbbf24;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .badge-no {
+            background: rgba(52, 211, 153, 0.12);
+            color: #6ee7b7;
+            border: 1px solid rgba(52, 211, 153, 0.2);
+        }
+
+        .badge-pk {
+            background: rgba(244, 114, 182, 0.12);
+            color: #f9a8d4;
+            border: 1px solid rgba(244, 114, 182, 0.2);
+        }
+
+        .badge-es {
+            background: rgba(167, 139, 250, 0.12);
+            color: #c4b5fd;
+            border: 1px solid rgba(167, 139, 250, 0.2);
+        }
+
+        .badge-ph {
+            background: rgba(251, 191, 36, 0.12);
+            color: #fde68a;
+            border: 1px solid rgba(251, 191, 36, 0.2);
+        }
+
+        .stat-ring {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stat-ring svg {
+            position: absolute;
+            inset: 0;
+        }
+
+        .guide-step {
+            display: flex;
+            gap: 14px;
+            padding: 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 10px;
+            transition: border-color 0.2s;
+        }
+
+        .guide-step:hover {
+            border-color: rgba(139, 92, 246, 0.25);
+        }
+
+        .guide-step-num {
+            width: 30px;
+            height: 30px;
+            border-radius: 10px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 800;
+            font-family: 'Space Mono', monospace;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(45, 212, 191, 0.12));
+            border: 1px solid rgba(139, 92, 246, 0.25);
+            color: #c4b5fd;
+        }
+
+        .guide-code {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: 'Fira Code', 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #a5f3fc;
+            margin-top: 8px;
+            overflow-x: auto;
+            user-select: all;
+            cursor: pointer;
+        }
+
+        .guide-code:hover {
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+
+        @keyframes fadeSlide {
+            from {
+                opacity: 0;
+                transform: translateY(-6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .ml-log-entry {
+            animation: fadeSlide 0.25s ease;
+        }
+    </style>
+</head>
+
+<body class="bg-[#060610] text-slate-100 font-sans h-full flex overflow-x-hidden">
+    <canvas id="bgCanvas" class="fixed inset-0 w-full h-full pointer-events-none z-0 opacity-40"></canvas>
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="fixed top-0 left-0 bottom-0 z-50 flex flex-col w-60
+         bg-[rgba(6,6,20,0.92)] border-r border-white/[0.06]
+         backdrop-blur-2xl px-4 py-5">
+
+        <div class="flex items-center justify-between pb-4 mb-3 border-b border-white/[0.06]">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0
+                    border border-teal-500/30"
+                    style="background:linear-gradient(135deg,rgba(45,212,191,0.3),rgba(139,92,246,0.2))">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <rect x="3" y="3" width="7" height="7" rx="1.5" fill="rgba(45,212,191,0.4)" stroke="#2dd4bf"
+                            stroke-width="1.5" />
+                        <rect x="14" y="3" width="7" height="7" rx="1.5" fill="rgba(139,92,246,0.3)" stroke="#8b5cf6"
+                            stroke-width="1.5" />
+                        <rect x="3" y="14" width="7" height="7" rx="1.5" fill="rgba(251,191,36,0.3)" stroke="#fbbf24"
+                            stroke-width="1.5" />
+                        <rect x="14" y="14" width="7" height="7" rx="1.5" fill="rgba(244,114,182,0.3)" stroke="#f472b6"
+                            stroke-width="1.5" />
+                    </svg>
+                </div>
+                <div>
+                    <div
+                        class="font-grotesk text-base font-bold bg-gradient-to-r from-teal-400 to-violet-400 bg-clip-text text-transparent">
+                        ML Monitor
+                    </div>
+                    <div class="text-[10px] text-slate-500 font-medium tracking-wider uppercase mt-0.5">
+                        Random Forest
+                    </div>
+                </div>
+            </div>
+            <a href="./index.html" class="text-[10px] font-semibold text-slate-400 px-2 py-1 rounded-lg border border-white/[0.08]
+               hover:border-violet-400/60 hover:text-violet-300 transition-colors">
+                Dashboard
+            </a>
+        </div>
+
+        <!-- ESP32 Connection -->
+        <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Device</div>
+        <div class="flex items-center gap-2 bg-white/[0.05] border border-white/[0.09] rounded-xl px-3 py-2 mb-3
+              focus-within:border-teal-500/40 transition-colors duration-200">
+            <svg class="text-teal-400 flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M6.34 17.66a8 8 0 0 1 0-11.32M17.66 6.34a8 8 0 0 1 0 11.32" />
+            </svg>
+            <input id="espIP" type="text" value="10.165.227.61" placeholder="ESP32 IP"
+                class="bg-transparent border-none outline-none text-slate-100 font-mono text-xs w-full placeholder:text-slate-600">
+        </div>
+        <button id="btnConnect" class="group flex items-center justify-center gap-2 w-full py-2.5 rounded-xl
+           border border-teal-500/30 bg-teal-500/10 text-teal-300 text-[12px] font-semibold mb-3
+           transition-all duration-200 hover:bg-teal-500/20 hover:border-teal-400/50">
+            <span class="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.8)]"></span>
+            Connect & Classify
+        </button>
+        <div id="statusPill" class="status-chip disconnected mb-2">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="statusText">Disconnected</span>
+        </div>
+
+        <div class="h-px bg-white/[0.06] my-5"></div>
+
+        <!-- Model Status -->
+        <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Model</div>
+        <div class="flex flex-col gap-2 bg-white/[0.025] border border-white/[0.06] rounded-xl p-3 text-[11px] mb-4">
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Status</span>
+                <span id="modelStatus" class="font-mono text-xs text-slate-400">Checking…</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Trees</span>
+                <span id="modelTrees" class="font-mono text-xs text-slate-300">—</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Features</span>
+                <span id="modelFeatures" class="font-mono text-xs text-slate-300">—</span>
+            </div>
+        </div>
+
+        <div class="h-px bg-white/[0.06] my-5"></div>
+
+        <!-- Live Stats -->
+        <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 px-1 mb-3">Live Stats</div>
+        <div class="flex flex-col gap-2 bg-white/[0.025] border border-white/[0.06] rounded-xl p-3 text-[11px]">
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Windows</span>
+                <span id="totalWindows" class="font-mono text-xs text-slate-100">0</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Tremor</span>
+                <span id="tremorCount" class="font-mono text-xs text-rose-400">0</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">No Tremor</span>
+                <span id="noTremorCount" class="font-mono text-xs text-emerald-400">0</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-slate-500">Tremor %</span>
+                <span id="tremorPct" class="font-mono text-xs text-slate-300">0%</span>
+            </div>
+        </div>
+
+        <div class="flex-1"></div>
+        <div class="text-[10px] text-slate-600 mt-4">
+            Random Forest (scikit-learn)<br>Trained with synthetic + real data
+        </div>
+    </aside>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <main class="ml-60 flex-1 flex flex-col min-h-screen relative z-10">
+
+        <!-- Header -->
+        <header class="sticky top-0 z-40 flex items-center justify-between px-7 py-4
+                   border-b border-white/[0.06] bg-[rgba(6,6,16,0.75)] backdrop-blur-xl">
+            <div>
+                <h1 class="font-grotesk text-xl font-bold tracking-tight">ML Classification Monitor</h1>
+                <p class="text-xs text-slate-500 mt-0.5">
+                    Real-time Random Forest tremor detection. Connect the ESP32 to start classifying.
+                </p>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="btnClearLog" class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500
+               bg-white/[0.04] border border-white/[0.07] px-3 py-1.5 rounded-lg
+               hover:bg-white/[0.07] hover:text-slate-300 transition-all duration-150">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                    </svg>
+                    Clear Log
+                </button>
+                <div class="flex items-center gap-2 px-3 py-1.5 rounded-full
+                border border-white/[0.06] bg-white/[0.03]
+                text-[11px] font-bold tracking-widest uppercase" id="liveTag">
+                    <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+                    <span id="liveText">IDLE</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ──── Content Grid ──── -->
+        <div class="grid gap-4 px-7 py-5 flex-1"
+            style="grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr;">
+
+            <!-- ── Left: Live Summary Gauges ── -->
+            <div class="flex gap-3" style="grid-column: 1 / -1;">
+                <!-- Tremor Detected -->
+                <div class="vital-card group flex-1">
+                    <div class="icon-wrap rose">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Last Prediction
+                        </div>
+                        <div class="font-mono text-lg font-bold text-slate-100" id="lastPrediction">—</div>
+                    </div>
+                </div>
+                <!-- Confidence -->
+                <div class="vital-card group flex-1">
+                    <div class="icon-wrap violet">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 6v6l4 2" />
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Confidence</div>
+                        <div class="font-mono text-lg font-bold text-violet-400" id="lastConfidence">—</div>
+                    </div>
+                </div>
+                <!-- Band Powers -->
+                <div class="vital-card group flex-1">
+                    <div class="icon-wrap teal">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5">
+                            <rect x="2" y="2" width="4" height="20" rx="1" />
+                            <rect x="10" y="8" width="4" height="14" rx="1" />
+                            <rect x="18" y="13" width="4" height="9" rx="1" />
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Band Powers</div>
+                        <div class="font-mono text-sm font-bold text-teal-400" id="lastBands">— / — / —</div>
+                    </div>
+                </div>
+                <!-- Is Tremor? -->
+                <div class="vital-card group flex-1">
+                    <div class="icon-wrap emerald">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5">
+                            <path d="M9 11l3 3L22 4" />
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Is Tremor?</div>
+                        <div class="font-mono text-lg font-bold" id="isTremor">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Left: Classification Log ── -->
+            <section class="flex flex-col gap-0">
+                <div class="panel-card flex flex-col" style="flex:1; min-height: 300px;">
+                    <div class="panel-header">
+                        <div class="panel-label">
+                            <div class="panel-icon teal bg-teal-400/10 border-teal-400/20 text-teal-400">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2.5">
+                                    <path
+                                        d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
+                                </svg>
+                            </div>
+                            <span class="panel-label-text">Classification Log</span>
+                        </div>
+                        <span class="text-[10px] font-mono text-slate-600" id="logCount">0 entries</span>
+                    </div>
+                    <!-- Log header -->
+                    <div class="ml-log-entry"
+                        style="border-bottom: 1px solid rgba(255,255,255,0.06); animation: none; padding-top:4px; padding-bottom:4px;">
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-600">Time</span>
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-600">Probability
+                            Distribution</span>
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-600">Prediction</span>
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-600">Confidence</span>
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-600">Tremor?</span>
+                    </div>
+                    <!-- Scrollable log body -->
+                    <div id="classificationLog" class="flex-1 overflow-y-auto custom-scroll"
+                        style="max-height:calc(100vh - 380px);">
+                        <div id="logPlaceholder"
+                            class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+                            <div class="w-16 h-16 rounded-full border border-teal-400/20 flex items-center justify-center"
+                                style="background:linear-gradient(135deg,rgba(45,212,191,0.1),rgba(139,92,246,0.06))">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+                                    stroke="rgba(45,212,191,0.5)" stroke-width="1.5">
+                                    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                                    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                                    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                                    <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                                </svg>
+                            </div>
+                            <p class="text-[13px] text-slate-500 max-w-[280px]">
+                                Connect the ESP32 device to start<br>real-time ML classification.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── Right: How to Train ── -->
+            <section class="flex flex-col gap-4">
+                <div class="panel-card flex flex-col"
+                    style="flex:1; border-color:rgba(139,92,246,0.15); background:linear-gradient(135deg,rgba(139,92,246,0.04),rgba(45,212,191,0.02));">
+                    <div class="flex items-center gap-3 pb-3 mb-3 border-b border-violet-500/10">
+                        <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 border border-violet-400/25"
+                            style="background:linear-gradient(135deg,rgba(139,92,246,0.25),rgba(167,139,250,0.15))">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa"
+                                stroke-width="2">
+                                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="text-sm font-bold text-violet-300">How to Train the Model</div>
+                            <div class="text-[11px] text-slate-500 mt-0.5">Random Forest · scikit-learn</div>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto custom-scroll pr-1" style="max-height:calc(100vh - 380px);">
+                        <!-- Step 1 -->
+                        <div class="guide-step">
+                            <div class="guide-step-num">1</div>
+                            <div>
+                                <div class="text-[12px] font-semibold text-slate-200">Navigate to backend directory
+                                </div>
+                                <div class="text-[11px] text-slate-500 mt-1">Open a terminal in the project's backend
+                                    folder.</div>
+                                <div class="guide-code">cd ai_dashboard/backend</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2 -->
+                        <div class="guide-step">
+                            <div class="guide-step-num">2</div>
+                            <div>
+                                <div class="text-[12px] font-semibold text-slate-200">Train with synthetic data</div>
+                                <div class="text-[11px] text-slate-500 mt-1">Generates 6,000 synthetic samples based on
+                                    clinical tremor frequency profiles and trains the RF model.</div>
+                                <div class="guide-code">python -m ml.train_model</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3 -->
+                        <div class="guide-step">
+                            <div class="guide-step-num">3</div>
+                            <div>
+                                <div class="text-[12px] font-semibold text-slate-200">Augment with real data (optional)
+                                </div>
+                                <div class="text-[11px] text-slate-500 mt-1">Loads your stored sessions from <code
+                                        style="color:#a5f3fc;font-size:11px">profiles.db</code> and combines them with
+                                    synthetic data. Real samples are weighted 3× more.</div>
+                                <div class="guide-code">python -m ml.train_model --augment-from-db</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 4 -->
+                        <div class="guide-step">
+                            <div class="guide-step-num">4</div>
+                            <div>
+                                <div class="text-[12px] font-semibold text-slate-200">Customize training</div>
+                                <div class="text-[11px] text-slate-500 mt-1">Adjust the number of trees and samples per
+                                    class for better accuracy.</div>
+                                <div class="guide-code">python -m ml.train_model \<br> --n-per-class 3000 \<br>
+                                    --n-estimators 200 \<br> --max-depth 15</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 5 -->
+                        <div class="guide-step">
+                            <div class="guide-step-num">5</div>
+                            <div>
+                                <div class="text-[12px] font-semibold text-slate-200">Inspect training data</div>
+                                <div class="text-[11px] text-slate-500 mt-1">Export the training data as a CSV to review
+                                    in Excel or a notebook.</div>
+                                <div class="guide-code">python -m ml.train_model --export-csv</div>
+                            </div>
+                        </div>
+
+                        <!-- Divider -->
+                        <div class="h-px bg-white/[0.06] my-4"></div>
+
+                        <!-- How it works -->
+                        <div class="text-[9px] font-bold tracking-widest uppercase text-slate-600 mb-2">How It Works
+                        </div>
+
+                        <div class="text-[12px] leading-relaxed text-slate-400 space-y-3">
+                            <p>
+                                The model takes <strong class="text-slate-200">7 features</strong> from each 2.56s ESP32
+                                window:
+                            </p>
+                            <div class="grid grid-cols-2 gap-1 text-[11px]">
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span> b1 (4–6 Hz)
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-violet-400"></span> b2 (6–8 Hz)
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> b3 (8–12 Hz)
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-teal-400"></span> total_power
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> meanNorm
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span> dom_ratio
+                                </div>
+                                <div class="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04]"
+                                    style="grid-column:1/-1">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-pink-400"></span> spectral_centroid (most
+                                    important — 23%)
+                                </div>
+                            </div>
+
+                            <p>
+                                <strong class="text-slate-200">150 decision trees</strong> each vote independently. The
+                                majority vote becomes the final prediction.
+                            </p>
+
+                            <p>
+                                The model classifies into <strong class="text-slate-200">4 classes</strong>:
+                            </p>
+                            <div class="flex flex-wrap gap-1.5 mt-1">
+                                <span class="badge badge-no">No Tremor</span>
+                                <span class="badge badge-pk">Parkinsonian</span>
+                                <span class="badge badge-es">Essential</span>
+                                <span class="badge badge-ph">Physiological</span>
+                            </div>
+
+                            <div class="p-3 rounded-xl mt-2"
+                                style="background:rgba(45,212,191,0.04);border:1px solid rgba(45,212,191,0.1)">
+                                <div class="text-[11px] font-semibold text-teal-400 mb-1">Accuracy</div>
+                                <div class="text-[11px] text-slate-400">
+                                    <strong class="text-slate-200">94.5%</strong> test accuracy · 100% no-tremor
+                                    detection · ~92% per-subtype
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="./ml.js"></script>
+</body>
+
+</html>

@@ -116,6 +116,63 @@ function initWaveChart() {
 }
 
 /* ═══════════════════════════════════════════════════
+   CHART: SPECTROGRAM
+═══════════════════════════════════════════════════ */
+let specCanvas = null;
+let specCtx = null;
+let specOff = null;
+let specOffCtx = null;
+
+function initSpectrogram() {
+  specCanvas = document.getElementById('specCanvas');
+  if (!specCanvas) return;
+  specCtx = specCanvas.getContext('2d', { alpha: false });
+
+  specOff = document.createElement('canvas');
+  specOff.width = 300;
+  specOff.height = 180;
+  specOffCtx = specOff.getContext('2d', { alpha: false });
+  specOffCtx.fillStyle = 'rgba(0,0,0,0.35)';
+  specOffCtx.fillRect(0, 0, specOff.width, specOff.height);
+
+  function resizeSpec() {
+    const rect = specCanvas.parentElement.getBoundingClientRect();
+    specCanvas.width = rect.width;
+    specCanvas.height = rect.height;
+    specOff.height = rect.height;
+  }
+  window.addEventListener('resize', resizeSpec);
+  setTimeout(resizeSpec, 100);
+
+  function drawSpec() {
+    if (!specCanvas.width) return requestAnimationFrame(drawSpec);
+    specCtx.drawImage(specOff, 0, 0, specCanvas.width, specCanvas.height);
+    requestAnimationFrame(drawSpec);
+  }
+  requestAnimationFrame(drawSpec);
+}
+
+function cmapSpec(v) {
+  v = Math.max(0, Math.min(1, v));
+  const r = Math.floor(255 * v);
+  const g = Math.floor(200 * v * 0.7);
+  const b = Math.floor(180 * (1 - v));
+  return `rgb(${r},${g},${b})`;
+}
+
+function pushSpectrogramRow(P1, P2, P3) {
+  if (!specOffCtx) return;
+  const w = specOff.width, h = specOff.height;
+  const img = specOffCtx.getImageData(1, 0, w - 1, h);
+  specOffCtx.putImageData(img, 0, 0);
+
+  const stripe = Math.floor(h / 3);
+  specOffCtx.fillStyle = cmapSpec(Math.min(P3 / 25, 1)); specOffCtx.fillRect(w - 1, 0, 1, stripe);
+  specOffCtx.fillStyle = cmapSpec(Math.min(P2 / 25, 1)); specOffCtx.fillRect(w - 1, stripe, 1, stripe);
+  specOffCtx.fillStyle = cmapSpec(Math.min(P1 / 25, 1)); specOffCtx.fillRect(w - 1, stripe * 2, 1, h - stripe * 2);
+}
+
+/* ═══════════════════════════════════════════════════
    CHART: SCORE SPARKLINE
 ═══════════════════════════════════════════════════ */
 let sparkChart = null;
@@ -283,12 +340,13 @@ function updateTrend() {
   }
 }
 
-/* ═══════════════════════════════════════════════════
-   CONNECT (ESP32)
-═══════════════════════════════════════════════════ */
+// ─── CONNECT (ESP32) ──────────────────────────────────
 function connectESP() {
   const ip = document.getElementById('espIP').value.trim();
   if (!ip) { log('<span style="color:#fb7185">⚠ Enter TremorSense IP address</span>'); return; }
+
+  localStorage.setItem('espIP', ip);
+
   if (sse) { sse.close(); sse = null; }
 
   const url = `http://${ip}/events`;
@@ -296,10 +354,15 @@ function connectESP() {
   setStatus('disconnected', 'Connecting…');
 
   try { sse = new EventSource(url); }
-  catch (e) { log(`<span style="color:#fb7185">Failed: ${e.message}</span>`); return; }
+  catch (e) {
+    log(`<span style="color:#fb7185">Failed: ${e.message}</span>`);
+    localStorage.setItem('espConnected', 'false');
+    return;
+  }
 
   sse.onopen = () => {
     setStatus('connected', 'Connected');
+    localStorage.setItem('espConnected', 'true');
     log('<span style="color:#34d399">✓ SSE stream established</span>');
     document.getElementById('btnStart').disabled = false;
     gsap.fromTo('#btnStart', { scale: 1.06 }, { scale: 1, duration: 0.35, ease: 'back.out(2)' });
@@ -307,6 +370,7 @@ function connectESP() {
 
   sse.onerror = () => {
     setStatus('disconnected', 'Disconnected');
+    localStorage.setItem('espConnected', 'false');
     log('<span style="color:#fb7185">✗ Connection lost</span>');
     document.getElementById('btnStart').disabled = true;
   };
@@ -315,6 +379,7 @@ function connectESP() {
     const j = JSON.parse(e.data);
     updateLiveDisplay(j);
     pushWave(j.score);
+    pushSpectrogramRow(j.b1, j.b2, j.b3);
     // Collect windows for the active regular session
     if (sessionActive) {
       sessionWindows.push({ b1: j.b1, b2: j.b2, b3: j.b3, score: j.score, type: j.type || '', confidence: j.confidence || 0, meanNorm: j.meanNorm || 0, ts: Date.now() });
@@ -518,7 +583,7 @@ function buildSessionSummary() {
     frequency_profile: { band_power_mean: { hz_4_6: +b1m.toFixed(3), hz_6_8: +b2m.toFixed(3), hz_8_12: +b3m.toFixed(3) }, band_power_std: { hz_4_6: +b1std.toFixed(3), hz_6_8: +b2std.toFixed(3), hz_8_12: +b3std.toFixed(3) }, dominant_band: domBand, dominance_ratio: +domRatio.toFixed(2), dominant_band_percentage: +domPct.toFixed(3), band_switch_count: switches },
     intensity_profile: { tremor_score: { mean: +mean.toFixed(2), std: +std.toFixed(2), min: +Math.min(...scores).toFixed(2), max: +Math.max(...scores).toFixed(2), p25: +percentile(scores, 25).toFixed(2), p50: +percentile(scores, 50).toFixed(2), p75: +percentile(scores, 75).toFixed(2), p90: +percentile(scores, 90).toFixed(2) }, rms_mean: +rmsMean.toFixed(3), noise_floor_adjusted_intensity: calibratedNoiseFloor != null ? +Math.max(0, rmsMean - calibratedNoiseFloor).toFixed(3) : +(rmsMean * 0.93).toFixed(3) },
     intensity_distribution: { low_fraction: +low.toFixed(3), moderate_fraction: +moderate.toFixed(3), high_fraction: +high.toFixed(3), very_high_fraction: +vhigh.toFixed(3) },
-    variability_profile: { coefficient_of_variation: +cv.toFixed(3), stability_index: +Math.max(0, stability).toFixed(3), spectral_entropy, window_to_window_variance: +wtwVar.toFixed(3) },
+    variability_profile: { coefficient_of_variation: +cv.toFixed(3), stability_index: +Math.max(0, stability).toFixed(3), spectral_entropy: spectralEntropy, window_to_window_variance: +wtwVar.toFixed(3) },
     within_session_trend: { linear_slope_per_minute_score_units: +slopePerMin.toFixed(4), early_vs_late_change_percent: +earlyLateChange.toFixed(1), fatigue_pattern_detected: earlyLateChange > 5 },
     multi_session_trend: { dominant_band_consistency_last_3: consistency, tremor_score_weekly_slope: weeklySlope, severity_change_percent: severityChangePct, band_shift_detected: bandShift }
   };
@@ -543,51 +608,45 @@ async function generateReport() {
   gsap.to(ph, { opacity: 0, y: -10, duration: 0.3, onComplete: () => ph.style.display = 'none' });
   result.style.display = 'flex';
   gsap.fromTo(result, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4 });
-  content.innerHTML = '<p style="color:#475569;font-size:13px">Generating clinical report via MedGemma 4B…</p>';
+  content.innerHTML = '<p style="color:#475569;font-size:13px">Analysing biomarkers…</p>';
   confEl.innerHTML = ''; advEl.innerText = '';
-  log('<span style="color:#a78bfa">🧠 Sending to backend for AI analysis…</span>');
+  log('<span style="color:#a78bfa">🧠 Analysing biomarkers & saving session…</span>');
 
   try {
-    const resp = await fetch(BACKEND_URL + '/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(summary) });
+    // Single call: rule-based analysis + SQLite persistence (no MedGemma)
+    const resp = await fetch(BACKEND_URL + '/profile/session/direct', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: summary })
+    });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
+    const stored = await resp.json();
 
-    content.innerHTML = data.clinical_summary
+    // Fetch the full record back so we get the clinical_summary text
+    const detailResp = await fetch(BACKEND_URL + '/profile/sessions/' + stored.session_id);
+    if (!detailResp.ok) throw new Error('HTTP ' + detailResp.status);
+    const detail = await detailResp.json();
+
+    content.innerHTML = detail.clinical_summary
       .replace(/## (.+)/g, '<h3>$1</h3>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
 
-    const cl = data.confidence_level.toLowerCase();
+    const cl = stored.confidence_level.toLowerCase();
     confEl.className = 'ai-confidence-chip ' + cl;
-    confEl.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Confidence: ${data.confidence_level}`;
-    advEl.innerText = '⚠️ ' + data.advisory_note;
-
-    // Persist this session + AI interpretation into local SQLite profile store.
-    // This enables the longitudinal trends screen (profiles.html).
-    try {
-      await fetch(BACKEND_URL + '/profile/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session: summary,
-          clinical_summary: data.clinical_summary,
-          confidence_level: data.confidence_level
-        })
-      });
-    } catch (e) {
-      console.warn('Failed to store session in local profile DB', e);
-    }
+    confEl.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Confidence: ${stored.confidence_level}`;
+    advEl.innerText = '⚠️ ' + (detail.advisory_note || 'This analysis does not constitute a medical diagnosis. Results should be reviewed by a qualified healthcare professional.');
 
     sessionHistory.push({ domBand: summary.frequency_profile.dominant_band, meanScore: summary.intensity_profile.tremor_score.mean, ts: Date.now() });
     if (sessionHistory.length > 10) sessionHistory.shift();
     localStorage.setItem('tremorSessionHistory', JSON.stringify(sessionHistory));
-    log('<span style="color:#34d399">✓ AI report generated</span>');
+    log('<span style="color:#34d399">✓ Report generated & session saved</span>');
   } catch (err) {
     content.innerHTML = `<p style="color:#fb7185">❌ ${err.message}</p><p style="color:#475569;margin-top:8px">Ensure backend is running at ${BACKEND_URL}</p>`;
     log(`<span style="color:#fb7185">✗ ${err.message}</span>`);
   }
   btn.disabled = false;
-  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg> Generate AI Report`;
+  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg> Generate Report`;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -657,11 +716,26 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   initWaveChart();
+  initSpectrogram();
   initSparkline();
   initTrendChart();
   initDistChart();
   runEntranceAnimations();
   log('TremorSense AI <span style="color:#a78bfa">v2.1 ready</span> — npm Tailwind + GSAP');
+
+  // ESP32 IP Persistence
+  const savedIP = localStorage.getItem('espIP');
+  const ipInput = document.getElementById('espIP');
+  if (savedIP && ipInput) ipInput.value = savedIP;
+
+  if (ipInput) {
+    ipInput.addEventListener('input', (e) => localStorage.setItem('espIP', e.target.value.trim()));
+  }
+
+  // Auto-connect if it was connected previously
+  if (localStorage.getItem('espConnected') === 'true') {
+    setTimeout(connectESP, 500); // slight delay for DOM mount
+  }
 });
 
 /* ═══════════════════════════════════════════════════
@@ -892,17 +966,17 @@ async function _finishTests() {
   const modal = document.getElementById('testModal');
   gsap.to(modal, { opacity: 0, duration: 0.35, onComplete: () => modal.classList.add('hidden') });
 
-  log('<span style="color:#38bdf8">⏳ Sending test phases to AI for analysis…</span>');
+  log('<span style="color:#38bdf8">⏳ Analysing test phases from biomarkers…</span>');
 
   // Render empty results card while loading
   const card = document.getElementById('testResultsCard');
   card.classList.remove('hidden');
   gsap.fromTo(card, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4 });
-  document.getElementById('trs-content').innerHTML = '<p style="color:#475569;font-size:12px">Analysing phases via MedGemma…</p>';
+  document.getElementById('trs-content').innerHTML = '<p style="color:#475569;font-size:12px">Analysing phases from biomarkers…</p>';
   document.getElementById('trs-confidence').innerHTML = '';
   document.getElementById('trs-advisory').textContent = '';
 
-  // Analyse each phase
+  // Analyse each phase (rule-based, no MedGemma)
   for (let i = 0; i < testResults.length; i++) {
     const r = testResults[i];
     const summary = _buildPhaseSummary(r.windows, r.phase);
@@ -915,7 +989,7 @@ async function _finishTests() {
     }
 
     try {
-      const resp = await fetch(BACKEND_URL + '/tests/analyze-phase', {
+      const resp = await fetch(BACKEND_URL + '/tests/analyze-phase/direct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phase: r.phase, duration_seconds: r.duration, session: summary })
